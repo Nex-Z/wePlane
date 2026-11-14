@@ -4,6 +4,7 @@ package linux
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -12,6 +13,10 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,20 +25,24 @@ import (
 	"weplane/internal/platform"
 )
 
+var validComposeProject = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]*$`)
+
 type containerProvider struct {
-	sockPath string
-	client   *http.Client
+	sockPath   string
+	composeDir string
+	client     *http.Client
 }
 
-func newContainerProvider(sockPath string) *containerProvider {
+func newContainerProvider(sockPath, dataDir string) *containerProvider {
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "unix", sockPath)
 		},
 	}
 	return &containerProvider{
-		sockPath: sockPath,
-		client:   &http.Client{Transport: transport, Timeout: 15 * time.Second},
+		sockPath:   sockPath,
+		composeDir: filepath.Join(dataDir, "compose"),
+		client:     &http.Client{Transport: transport, Timeout: 60 * time.Second},
 	}
 }
 
@@ -72,6 +81,16 @@ type dockerListEntry struct {
 		PublicPort  uint16 `json:"PublicPort"`
 		Type        string `json:"Type"`
 	} `json:"Ports"`
+	Mounts []struct {
+		Type        string `json:"Type"`
+		Source      string `json:"Source"`
+		Destination string `json:"Destination"`
+		Mode        string `json:"Mode"`
+		RW          bool   `json:"RW"`
+	} `json:"Mounts"`
+	NetworkSettings struct {
+		Networks map[string]any `json:"Networks"`
+	} `json:"NetworkSettings"`
 }
 
 func (c *containerProvider) ListContainers(ctx context.Context, all bool) ([]platform.ContainerSummary, error) {
@@ -96,6 +115,18 @@ func (c *containerProvider) ListContainers(ctx context.Context, all bool) ([]pla
 				Type:        p.Type,
 			})
 		}
+		mounts := make([]platform.ContainerMount, 0, len(e.Mounts))
+		for _, m := range e.Mounts {
+			mounts = append(mounts, platform.ContainerMount{
+				Type: m.Type, Source: m.Source, Destination: m.Destination, Mode: m.Mode, RW: m.RW,
+			})
+		}
+		nets := make([]string, 0, len(e.NetworkSettings.Networks))
+		for k := range e.NetworkSettings.Networks {
+			nets = append(nets, k)
+		}
+		sort.Strings(nets)
+
 		out = append(out, platform.ContainerSummary{
 			ID:             e.ID,
 			ShortID:        e.ID[:minInt(12, len(e.ID))],
@@ -107,6 +138,8 @@ func (c *containerProvider) ListContainers(ctx context.Context, all bool) ([]pla
 			ComposeProject: e.Labels["com.docker.compose.project"],
 			ComposeService: e.Labels["com.docker.compose.service"],
 			Ports:          ports,
+			Networks:       nets,
+			Mounts:         mounts,
 		})
 	}
 
@@ -185,10 +218,10 @@ func (c *containerProvider) InspectContainer(ctx context.Context, id string) (*p
 			CreatedAt:      createdAt,
 			ComposeProject: raw.Config.Labels["com.docker.compose.project"],
 			ComposeService: raw.Config.Labels["com.docker.compose.service"],
+			Mounts:         mounts,
+			Networks:       nets,
 		},
 		Command:       strings.Join(raw.Config.Cmd, " "),
-		Mounts:        mounts,
-		Networks:      nets,
 		EnvKeys:       envKeys,
 		RestartPolicy: raw.HostConfig.RestartPolicy.Name,
 	}, nil
@@ -207,6 +240,217 @@ func (c *containerProvider) ControlContainer(ctx context.Context, id string, act
 		return fmt.Errorf("unsupported container action: %s", action)
 	}
 	return c.doJSON(ctx, http.MethodPost, endpoint, nil)
+}
+
+func (c *containerProvider) DeleteContainer(ctx context.Context, id string) error {
+	endpoint := "/containers/" + url.PathEscape(id) + "?force=true"
+	return c.doJSON(ctx, http.MethodDelete, endpoint, nil)
+}
+
+func (c *containerProvider) CreateContainer(ctx context.Context, req platform.CreateContainerRequest) (string, error) {
+	if strings.TrimSpace(req.Image) == "" {
+		return "", fmt.Errorf("image is required")
+	}
+
+	exposedPorts := make(map[string]struct{})
+	portBindings := make(map[string][]map[string]string)
+	for _, p := range req.Ports {
+		parts := strings.Split(strings.TrimSpace(p), ":")
+		if len(parts) != 2 {
+			continue
+		}
+		hostPort := parts[0]
+		contSpec := parts[1]
+		if !strings.Contains(contSpec, "/") {
+			contSpec += "/tcp"
+		}
+		exposedPorts[contSpec] = struct{}{}
+		portBindings[contSpec] = append(portBindings[contSpec], map[string]string{"HostPort": hostPort})
+	}
+
+	restartName := req.RestartPolicy
+	if restartName == "" {
+		restartName = "unless-stopped"
+	}
+
+	payload := map[string]any{
+		"Image":        req.Image,
+		"Env":          req.Env,
+		"ExposedPorts": exposedPorts,
+		"HostConfig": map[string]any{
+			"Binds":        req.Volumes,
+			"PortBindings": portBindings,
+			"RestartPolicy": map[string]any{
+				"Name": restartName,
+			},
+		},
+	}
+
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+
+	createPath := "/containers/create"
+	if name := strings.TrimSpace(req.Name); name != "" {
+		createPath += "?name=" + url.QueryEscape(name)
+	}
+
+	createOnce := func() (int, string, error) {
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://docker"+createPath, bytes.NewReader(bodyBytes))
+		if err != nil {
+			return 0, "", err
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		resp, err := c.client.Do(httpReq)
+		if err != nil {
+			return 0, "", err
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		return resp.StatusCode, string(raw), nil
+	}
+
+	status, rawResp, err := createOnce()
+	if err != nil {
+		return "", err
+	}
+	if status == http.StatusNotFound {
+		// Image not present locally; pull it first.
+		pullReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://docker/images/create?fromImage="+url.QueryEscape(req.Image), nil)
+		if err != nil {
+			return "", err
+		}
+		pullResp, err := c.client.Do(pullReq)
+		if err != nil {
+			return "", fmt.Errorf("pull image %s: %w", req.Image, err)
+		}
+		_, _ = io.Copy(io.Discard, pullResp.Body)
+		pullResp.Body.Close()
+		if pullResp.StatusCode >= 400 {
+			return "", fmt.Errorf("pull image %s failed with status %d", req.Image, pullResp.StatusCode)
+		}
+		status, rawResp, err = createOnce()
+		if err != nil {
+			return "", err
+		}
+	}
+	if status >= 400 {
+		return "", fmt.Errorf("create container failed (%d): %s", status, strings.TrimSpace(rawResp))
+	}
+
+	var created struct {
+		ID string `json:"Id"`
+	}
+	if err := json.Unmarshal([]byte(rawResp), &created); err != nil {
+		return "", err
+	}
+
+	if req.AutoStart && created.ID != "" {
+		if err := c.ControlContainer(ctx, created.ID, platform.ContainerActionStart); err != nil {
+			return created.ID, err
+		}
+	}
+	return created.ID, nil
+}
+
+func (c *containerProvider) DeployCompose(ctx context.Context, req platform.ComposeDeployRequest) (string, error) {
+	proj := strings.TrimSpace(req.Project)
+	if !validComposeProject.MatchString(proj) {
+		return "", fmt.Errorf("invalid compose project name: %q", proj)
+	}
+	if strings.TrimSpace(req.YAML) == "" {
+		return "", fmt.Errorf("compose YAML is required")
+	}
+
+	projDir := filepath.Join(c.composeDir, proj)
+	if custom := strings.TrimSpace(req.WorkDir); custom != "" {
+		if !filepath.IsAbs(custom) {
+			return "", fmt.Errorf("compose workDir must be an absolute path: %q", custom)
+		}
+		projDir = filepath.Clean(custom)
+	}
+
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		return "", err
+	}
+	composeFile := filepath.Join(projDir, "docker-compose.yml")
+	if err := os.WriteFile(composeFile, []byte(req.YAML), 0o600); err != nil {
+		return "", err
+	}
+	c.saveComposeDir(proj, projDir)
+
+	cmd := exec.CommandContext(ctx, "docker", "compose", "-f", composeFile, "-p", proj, "up", "-d")
+	cmd.Dir = projDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("docker compose up: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
+}
+
+func (c *containerProvider) ControlCompose(ctx context.Context, project, action string) (string, error) {
+	if !validComposeProject.MatchString(project) {
+		return "", fmt.Errorf("invalid compose project name: %q", project)
+	}
+	projDir := c.lookupComposeDir(project)
+	composeFile := filepath.Join(projDir, "docker-compose.yml")
+
+	var args []string
+	if _, err := os.Stat(composeFile); err == nil {
+		args = []string{"compose", "-f", composeFile, "-p", project}
+	} else {
+		args = []string{"compose", "-p", project}
+	}
+
+	switch action {
+	case "up":
+		args = append(args, "up", "-d")
+	case "restart":
+		args = append(args, "restart")
+	case "down":
+		args = append(args, "down")
+	default:
+		return "", fmt.Errorf("unsupported compose action: %s", action)
+	}
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	if _, err := os.Stat(projDir); err == nil {
+		cmd.Dir = projDir
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("docker compose %s: %w (%s)", action, err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
+}
+
+func (c *containerProvider) composeIndexPath() string {
+	return filepath.Join(c.composeDir, "projects.json")
+}
+
+func (c *containerProvider) saveComposeDir(project, dir string) {
+	_ = os.MkdirAll(c.composeDir, 0o700)
+	idx := make(map[string]string)
+	if b, err := os.ReadFile(c.composeIndexPath()); err == nil {
+		_ = json.Unmarshal(b, &idx)
+	}
+	idx[project] = dir
+	if b, err := json.MarshalIndent(idx, "", "  "); err == nil {
+		_ = os.WriteFile(c.composeIndexPath(), b, 0o600)
+	}
+}
+
+func (c *containerProvider) lookupComposeDir(project string) string {
+	if b, err := os.ReadFile(c.composeIndexPath()); err == nil {
+		idx := make(map[string]string)
+		if json.Unmarshal(b, &idx) == nil {
+			if dir, ok := idx[project]; ok && dir != "" {
+				return dir
+			}
+		}
+	}
+	return filepath.Join(c.composeDir, project)
 }
 
 func (c *containerProvider) StreamLogs(ctx context.Context, id string, tail int) (<-chan platform.LogLine, error) {

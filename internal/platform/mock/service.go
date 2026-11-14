@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -139,12 +140,94 @@ func (s *serviceProvider) GetUnit(_ context.Context, name string) (*platform.Ser
 		return nil, fmt.Errorf("unit %q not found", name)
 	}
 	copyVal := *u
+	if copyVal.UnitContent == "" {
+		copyVal.UnitContent = fmt.Sprintf(`[Unit]
+Description=%s
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%s
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+`, copyVal.Description, copyVal.ExecStart)
+	}
 	return &copyVal, nil
+}
+
+func (s *serviceProvider) DaemonReload(_ context.Context) error {
+	return nil
 }
 
 func (s *serviceProvider) ControlUnit(_ context.Context, name string, action platform.ServiceAction) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.controlUnitLocked(name, action)
+}
+
+func (s *serviceProvider) CreateUnit(_ context.Context, req platform.CreateServiceRequest) (string, error) {
+	unitName, err := platform.NormalizeServiceName(req.Name)
+	if err != nil {
+		return "", err
+	}
+	content, err := platform.BuildSystemdUnitContent(req)
+	if err != nil {
+		return "", err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.units[unitName]; exists {
+		return "", fmt.Errorf("服务 %s 已存在", unitName)
+	}
+	desc := strings.TrimSpace(req.Description)
+	if desc == "" {
+		desc = strings.TrimSuffix(unitName, ".service")
+	}
+
+	s.units[unitName] = &platform.ServiceDetail{
+		ServiceUnit: platform.ServiceUnit{
+			Name:          unitName,
+			Description:   desc,
+			LoadState:     "loaded",
+			ActiveState:   "inactive",
+			SubState:      "dead",
+			UnitFileState: "disabled",
+		},
+		ExecStart:    strings.TrimSpace(req.ExecStart),
+		FragmentPath: "/etc/systemd/system/" + unitName,
+		UnitContent:  content,
+	}
+	if req.Enable {
+		_ = s.controlUnitLocked(unitName, platform.ServiceActionEnable)
+	}
+	if req.Start {
+		_ = s.controlUnitLocked(unitName, platform.ServiceActionStart)
+	}
+	return unitName, nil
+}
+
+func (s *serviceProvider) DeleteUnit(_ context.Context, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u, ok := s.units[name]
+	if !ok {
+		return fmt.Errorf("unit %q not found", name)
+	}
+	if u.IsCritical {
+		return fmt.Errorf("拒绝删除系统关键服务 %s", name)
+	}
+	delete(s.units, name)
+	return nil
+}
+
+func (s *serviceProvider) controlUnitLocked(name string, action platform.ServiceAction) error {
 
 	u, ok := s.units[name]
 	if !ok {

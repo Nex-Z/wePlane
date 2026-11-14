@@ -22,9 +22,12 @@ export function DetailDrawer({ open, title, subtitle, onClose, children }: Detai
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-black/30 backdrop-blur-[2px]" onClick={onClose}>
-      <aside
-        className="glass-surface flex h-full w-full max-w-2xl flex-col shadow-2xl"
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 p-4 backdrop-blur-[2px]"
+      onClick={onClose}
+    >
+      <div
+        className="glass-surface flex max-h-[85vh] w-full max-w-3xl flex-col rounded-2xl shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-slate-200/70 px-6 py-4 dark:border-white/10">
@@ -37,13 +40,13 @@ export function DetailDrawer({ open, title, subtitle, onClose, children }: Detai
           <button
             onClick={onClose}
             className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-500/10 hover:text-slate-600 dark:hover:text-slate-200"
-            aria-label="关闭抽屉"
+            aria-label="关闭弹窗"
           >
             <X className="h-4 w-4" />
           </button>
         </header>
         <div className="flex-1 overflow-y-auto p-6">{children}</div>
-      </aside>
+      </div>
     </div>
   )
 }

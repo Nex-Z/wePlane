@@ -17,7 +17,7 @@ type Provider struct {
 }
 
 // NewProvider initializes native Linux system, systemd, and Docker clients.
-func NewProvider(dockerSock string) (*Provider, error) {
+func NewProvider(dockerSock, dataDir string) (*Provider, error) {
 	conn, err := dbus.SystemBus()
 	if err != nil {
 		return nil, err
@@ -25,8 +25,11 @@ func NewProvider(dockerSock string) (*Provider, error) {
 	if dockerSock == "" {
 		dockerSock = "/var/run/docker.sock"
 	}
+	if dataDir == "" {
+		dataDir = "/var/lib/weplane"
+	}
 	svc := newServiceProvider(conn)
-	ctr := newContainerProvider(dockerSock)
+	ctr := newContainerProvider(dockerSock, dataDir)
 	return &Provider{
 		sys: newSystemProvider(svc, ctr),
 		svc: svc,

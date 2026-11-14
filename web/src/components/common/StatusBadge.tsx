@@ -17,9 +17,29 @@ const stateStyles: Record<string, string> = {
   restarting: 'bg-amber-500/12 text-amber-600 dark:text-amber-400 border-amber-500/20',
 }
 
+const stateLabels: Record<string, string> = {
+  active: '运行中',
+  running: '运行中',
+  activating: '启动中',
+  deactivating: '停止中',
+  restarting: '重启中',
+  failed: '异常',
+  inactive: '已停止',
+  exited: '已退出',
+  dead: '已停止',
+  paused: '已暂停',
+  enabled: '已启用',
+  disabled: '未启用',
+  static: '静态',
+  masked: '已屏蔽',
+  indirect: '间接启用',
+  unknown: '未知',
+}
+
 export function StatusBadge({ state, className }: StatusBadgeProps) {
   const key = state.toLowerCase()
   const style = stateStyles[key] ?? 'bg-slate-500/10 text-slate-500 border-slate-500/20'
+  const label = stateLabels[key] ?? state
   const isHealthy = key === 'active' || key === 'running'
   const isError = key === 'failed'
 
@@ -39,7 +59,7 @@ export function StatusBadge({ state, className }: StatusBadgeProps) {
           !isHealthy && !isError && 'bg-current opacity-60',
         )}
       />
-      {state}
+      {label}
     </span>
   )
 }

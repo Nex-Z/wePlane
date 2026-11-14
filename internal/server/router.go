@@ -28,6 +28,7 @@ type Server struct {
 	auth     *auth.Store
 	audit    *audit.Logger
 	history  *metrics.HistoryStore
+	settings *config.SettingsStore
 	router   chi.Router
 }
 
@@ -44,6 +45,7 @@ func New(cfg config.Config, provider platform.Provider, authStore *auth.Store, a
 		auth:     authStore,
 		audit:    auditLogger,
 		history:  hist,
+		settings: config.NewSettingsStore(cfg.DataDir),
 		router:   chi.NewRouter(),
 	}
 	s.mountRoutes()
@@ -74,17 +76,38 @@ func (s *Server) mountRoutes() {
 			priv.Get("/system/processes", s.handleTopProcesses)
 
 			priv.Get("/services", s.handleListServices)
+			priv.Post("/services", s.handleCreateService)
+			priv.Post("/services/daemon-reload", s.handleDaemonReload)
 			priv.Get("/services/{unit}", s.handleGetService)
+			priv.Delete("/services/{unit}", s.handleDeleteService)
 			priv.Post("/services/{unit}/action", s.handleControlService)
 
 			priv.Get("/containers", s.handleListContainers)
+			priv.Post("/containers", s.handleCreateContainer)
 			priv.Get("/containers/{id}", s.handleInspectContainer)
+			priv.Delete("/containers/{id}", s.handleDeleteContainer)
 			priv.Post("/containers/{id}/action", s.handleControlContainer)
 
+			priv.Post("/compose/deploy", s.handleDeployCompose)
+			priv.Post("/compose/{project}/action", s.handleControlCompose)
+
 			priv.Get("/audit", s.handleListAudit)
+			priv.Post("/auth/password", s.handleChangePassword)
+			priv.Get("/settings", s.handleGetSettings)
+			priv.Put("/settings", s.handleUpdateSettings)
+			priv.Post("/settings/bark/test", s.handleTestBark)
+
+			priv.Get("/files", s.handleListFiles)
+			priv.Get("/files/content", s.handleReadFile)
+			priv.Put("/files/content", s.handleWriteFile)
+			priv.Post("/files/mkdir", s.handleMkdir)
+			priv.Post("/files/upload", s.handleUploadFile)
+			priv.Get("/files/download", s.handleDownloadFile)
+			priv.Delete("/files", s.handleDeleteFile)
 
 			priv.Get("/events/metrics", s.handleMetricsSSE)
 			priv.Get("/ws/logs", s.handleLogsWS)
+			priv.Get("/ws/terminal", s.handleTerminalWS)
 		})
 	})
 

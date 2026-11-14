@@ -9,5 +9,5 @@ import (
 )
 
 func newNativeProvider(cfg config.Config) (platform.Provider, error) {
-	return linux.NewProvider(cfg.DockerSocket)
+	return linux.NewProvider(cfg.DockerSocket, cfg.DataDir)
 }

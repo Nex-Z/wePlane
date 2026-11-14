@@ -119,6 +119,21 @@ export interface ServiceDetail extends ServiceUnit {
   execStart: string
   fragmentPath: string
   activeEnterAt: string
+  unitContent?: string
+}
+
+export interface CreateServiceRequest {
+  name: string
+  description?: string
+  execStart?: string
+  workingDirectory?: string
+  user?: string
+  restart?: string
+  environment?: string
+  after?: string
+  unitContent?: string
+  enable: boolean
+  start: boolean
 }
 
 export type ContainerAction = 'start' | 'stop' | 'restart'
@@ -141,6 +156,8 @@ export interface ContainerSummary {
   composeProject?: string
   composeService?: string
   ports: ContainerPort[]
+  networks: string[]
+  mounts: ContainerMount[]
   cpuPercent: number
   memoryBytes: number
   memoryLimitBytes: number
@@ -188,4 +205,74 @@ export interface ProcessInfo {
   memPercent: number
   memBytes: number
   command: string
+}
+
+export interface CreateContainerPayload {
+  name: string
+  image: string
+  ports: string[]
+  volumes: string[]
+  env: string[]
+  restartPolicy: string
+  autoStart: boolean
+}
+
+export interface ComposeDeployPayload {
+  project: string
+  workDir?: string
+  yaml: string
+}
+
+export interface BarkSettings {
+  enabled: boolean
+  serverUrl: string
+  deviceKey: string
+  group: string
+  notifyAlert: boolean
+  notifyLogin: boolean
+}
+
+export interface PanelSettings {
+  cpuAlertPercent: number
+  memAlertPercent: number
+  diskAlertPercent: number
+  refreshIntervalSec: number
+  defaultLogTail: number
+  bark: BarkSettings
+}
+
+export interface RuntimeInfo {
+  addr: string
+  dataDir: string
+  dockerSocket: string
+  mockMode: boolean
+  goVersion: string
+  os: string
+  arch: string
+}
+
+export interface SettingsPayload {
+  settings: PanelSettings
+  runtime: RuntimeInfo
+}
+
+export interface FileEntry {
+  name: string
+  path: string
+  isDir: boolean
+  size: number
+  mode: string
+  modTime: string
+}
+
+export interface FileListResponse {
+  path: string
+  parent: string
+  items: FileEntry[]
+}
+
+export interface FileContentResponse {
+  path: string
+  content: string
+  size: number
 }

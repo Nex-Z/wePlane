@@ -182,6 +182,50 @@ func (s *Server) handleControlService(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"unit": unit, "action": req.Action})
 }
 
+func (s *Server) handleDaemonReload(w http.ResponseWriter, r *http.Request) {
+	err := s.provider.Service().DaemonReload(r.Context())
+	s.recordAudit(r, "service.daemon-reload", "systemd", err)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "systemd_reload_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleCreateService(w http.ResponseWriter, r *http.Request) {
+	var req platform.CreateServiceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "请求格式错误")
+		return
+	}
+	unitName, err := s.provider.Service().CreateUnit(r.Context(), req)
+	target := strings.TrimSpace(req.Name)
+	if unitName != "" {
+		target = unitName
+	}
+	s.recordAudit(r, "service.create", target, err)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "service_create_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"name": unitName})
+}
+
+func (s *Server) handleDeleteService(w http.ResponseWriter, r *http.Request) {
+	unit := chi.URLParam(r, "unit")
+	if !hasConfirmHeader(r) {
+		writeError(w, http.StatusPreconditionRequired, "confirm_required", "删除服务需要二次确认")
+		return
+	}
+	err := s.provider.Service().DeleteUnit(r.Context(), unit)
+	s.recordAudit(r, "service.delete", unit, err)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "systemd_delete_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"unit": unit, "deleted": true})
+}
+
 func (s *Server) handleListContainers(w http.ResponseWriter, r *http.Request) {
 	all := r.URL.Query().Get("all") != "false"
 	list, err := s.provider.Container().ListContainers(r.Context(), all)
@@ -223,6 +267,77 @@ func (s *Server) handleControlContainer(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "action": req.Action})
+}
+
+func (s *Server) handleDeleteContainer(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if !hasConfirmHeader(r) {
+		writeError(w, http.StatusPreconditionRequired, "confirm_required", "删除容器需要二次确认")
+		return
+	}
+	err := s.provider.Container().DeleteContainer(r.Context(), id)
+	s.recordAudit(r, "container.delete", id, err)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "docker_delete_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "deleted": true})
+}
+
+func (s *Server) handleCreateContainer(w http.ResponseWriter, r *http.Request) {
+	var req platform.CreateContainerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "请求格式错误")
+		return
+	}
+	id, err := s.provider.Container().CreateContainer(r.Context(), req)
+	target := req.Name
+	if target == "" {
+		target = req.Image
+	}
+	s.recordAudit(r, "container.create", target, err)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "container_create_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": id})
+}
+
+func (s *Server) handleDeployCompose(w http.ResponseWriter, r *http.Request) {
+	var req platform.ComposeDeployRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "请求格式错误")
+		return
+	}
+	output, err := s.provider.Container().DeployCompose(r.Context(), req)
+	s.recordAudit(r, "compose.deploy", req.Project, err)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "compose_deploy_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"project": req.Project, "output": output})
+}
+
+func (s *Server) handleControlCompose(w http.ResponseWriter, r *http.Request) {
+	project := chi.URLParam(r, "project")
+	var req struct {
+		Action string `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "请求格式错误")
+		return
+	}
+	if req.Action == "down" && !hasConfirmHeader(r) {
+		writeError(w, http.StatusPreconditionRequired, "confirm_required", "下线 Compose 项目需要二次确认")
+		return
+	}
+	output, err := s.provider.Container().ControlCompose(r.Context(), project, req.Action)
+	s.recordAudit(r, "compose."+req.Action, project, err)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "compose_action_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"project": project, "action": req.Action, "output": output})
 }
 
 func (s *Server) handleListAudit(w http.ResponseWriter, r *http.Request) {

@@ -86,4 +86,13 @@ func TestAuthAndProtectedEndpoints(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 with confirm header, got %d: %s", rec.Code, rec.Body.String())
 	}
+
+	// 6. File listing works in mock mode
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/files?path=/", nil)
+	req.AddCookie(sessionCookie)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on files list, got %d: %s", rec.Code, rec.Body.String())
+	}
 }

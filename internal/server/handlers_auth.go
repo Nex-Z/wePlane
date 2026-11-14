@@ -1,11 +1,14 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
 	"weplane/internal/auth"
+	"weplane/internal/notify"
 )
 
 type loginRequest struct {
@@ -27,6 +30,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setSessionCookie(w, sess.Token, sess.ExpiresAt)
 	s.audit.Record(authAudit(r, "auth.login", sess.Username, nil))
+	if bark := s.settings.Get().Bark; bark.Enabled && bark.NotifyLogin && bark.DeviceKey != "" {
+		ip := r.RemoteAddr
+		go func(user, remote string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			_ = notify.SendBark(ctx, bark, "wePlane 登录提醒", fmt.Sprintf("管理员 %s 已登录（来源：%s）", user, remote))
+		}(sess.Username, ip)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"username": sess.Username,
 		"mockMode": s.provider.IsMock(),
@@ -112,4 +123,23 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, token string, expires t
 		SameSite: http.SameSiteLaxMode,
 		Secure:   s.cfg.SecureCookie,
 	})
+}
+
+func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		OldPassword string `json:"oldPassword"`
+		NewPassword string `json:"newPassword"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "请求格式错误")
+		return
+	}
+	username := currentUser(r)
+	err := s.auth.ChangePassword(username, req.OldPassword, req.NewPassword)
+	s.recordAudit(r, "auth.password", username, err)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "password_change_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

@@ -6,7 +6,9 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -79,6 +81,22 @@ func (s *serviceProvider) ListUnits(ctx context.Context) ([]platform.ServiceUnit
 		if err := s.manager().CallWithContext(ctx, systemdManager+".GetUnitFileState", 0, u.Name).Store(&stateStr); err == nil {
 			fileState = stateStr
 		}
+		var mainPID uint32
+		var memBytes uint64
+		if u.ActiveState == "active" && u.UnitPath != "" {
+			obj := s.conn.Object(systemdDest, u.UnitPath)
+			var svcProps map[string]dbus.Variant
+			if err := obj.CallWithContext(ctx, "org.freedesktop.DBus.Properties.GetAll", 0, "org.freedesktop.systemd1.Service").Store(&svcProps); err == nil {
+				if v, ok := svcProps["MainPID"]; ok {
+					mainPID, _ = v.Value().(uint32)
+				}
+				if v, ok := svcProps["MemoryCurrent"]; ok {
+					if val, ok := v.Value().(uint64); ok && val != ^uint64(0) {
+						memBytes = val
+					}
+				}
+			}
+		}
 		out = append(out, platform.ServiceUnit{
 			Name:          u.Name,
 			Description:   u.Description,
@@ -86,6 +104,8 @@ func (s *serviceProvider) ListUnits(ctx context.Context) ([]platform.ServiceUnit
 			ActiveState:   u.ActiveState,
 			SubState:      u.SubState,
 			UnitFileState: fileState,
+			MainPID:       mainPID,
+			MemoryBytes:   memBytes,
 			IsCritical:    criticalUnits[u.Name],
 		})
 	}
@@ -143,6 +163,9 @@ func (s *serviceProvider) GetUnit(ctx context.Context, name string) (*platform.S
 		}
 	}
 
+	fragmentPath := variantString(unitProps["FragmentPath"])
+	unitContent := readSafeUnitFile(fragmentPath)
+
 	return &platform.ServiceDetail{
 		ServiceUnit: platform.ServiceUnit{
 			Name:          name,
@@ -155,9 +178,86 @@ func (s *serviceProvider) GetUnit(ctx context.Context, name string) (*platform.S
 			MemoryBytes:   memBytes,
 			IsCritical:    criticalUnits[name],
 		},
-		FragmentPath:  variantString(unitProps["FragmentPath"]),
+		FragmentPath:  fragmentPath,
 		ActiveEnterAt: activeEnter,
+		UnitContent:   unitContent,
 	}, nil
+}
+
+func (s *serviceProvider) DaemonReload(ctx context.Context) error {
+	return s.manager().CallWithContext(ctx, systemdManager+".Reload", 0).Err
+}
+
+func (s *serviceProvider) CreateUnit(ctx context.Context, req platform.CreateServiceRequest) (string, error) {
+	unitName, err := platform.NormalizeServiceName(req.Name)
+	if err != nil {
+		return "", err
+	}
+	content, err := platform.BuildSystemdUnitContent(req)
+	if err != nil {
+		return "", err
+	}
+
+	unitPath := filepath.Join("/etc/systemd/system", unitName)
+	if _, err := os.Stat(unitPath); err == nil {
+		return "", fmt.Errorf("服务 %s 已存在（%s）", unitName, unitPath)
+	}
+	if err := os.WriteFile(unitPath, []byte(content), 0o644); err != nil {
+		return "", fmt.Errorf("写入 Unit 文件失败: %w", err)
+	}
+	if err := s.DaemonReload(ctx); err != nil {
+		return "", fmt.Errorf("已写入 Unit 文件，但 daemon-reload 失败: %w", err)
+	}
+	if req.Enable {
+		if err := s.ControlUnit(ctx, unitName, platform.ServiceActionEnable); err != nil {
+			return "", fmt.Errorf("已创建服务，但开启自启失败: %w", err)
+		}
+	}
+	if req.Start {
+		if err := s.ControlUnit(ctx, unitName, platform.ServiceActionStart); err != nil {
+			return "", fmt.Errorf("已创建服务，但启动失败: %w", err)
+		}
+	}
+	return unitName, nil
+}
+
+func (s *serviceProvider) DeleteUnit(ctx context.Context, name string) error {
+	unitName, err := platform.NormalizeServiceName(name)
+	if err != nil {
+		return err
+	}
+	if criticalUnits[unitName] {
+		return fmt.Errorf("拒绝删除系统关键服务 %s", unitName)
+	}
+	unitPath := filepath.Join("/etc/systemd/system", unitName)
+	if _, err := os.Stat(unitPath); os.IsNotExist(err) {
+		return fmt.Errorf("仅支持删除 /etc/systemd/system 下的自定义服务文件")
+	} else if err != nil {
+		return fmt.Errorf("检查 Unit 文件失败: %w", err)
+	}
+
+	_ = s.ControlUnit(ctx, unitName, platform.ServiceActionStop)
+	_ = s.ControlUnit(ctx, unitName, platform.ServiceActionDisable)
+	if err := os.Remove(unitPath); err != nil {
+		return fmt.Errorf("删除 Unit 文件失败: %w", err)
+	}
+	if err := s.DaemonReload(ctx); err != nil {
+		return fmt.Errorf("已删除 Unit 文件，但 daemon-reload 失败: %w", err)
+	}
+	return nil
+}
+
+func readSafeUnitFile(path string) string {
+	if !strings.HasPrefix(path, "/etc/systemd/") &&
+		!strings.HasPrefix(path, "/lib/systemd/") &&
+		!strings.HasPrefix(path, "/usr/lib/systemd/") {
+		return ""
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 func (s *serviceProvider) ControlUnit(ctx context.Context, name string, action platform.ServiceAction) error {

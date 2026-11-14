@@ -107,6 +107,30 @@ func (s *Store) CreateOrUpdateUser(username, password string) error {
 	return s.saveUsersLocked()
 }
 
+// ChangePassword verifies oldPassword and updates the user's password hash on disk.
+func (s *Store) ChangePassword(username, oldPassword, newPassword string) error {
+	if len(newPassword) < 6 {
+		return errors.New("新密码长度不能少于 6 位")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u, ok := s.users[username]
+	if !ok {
+		return errors.New("用户不存在")
+	}
+	if !verifyPassword(oldPassword, u.PasswordHash) {
+		return errors.New("原密码不正确")
+	}
+	hash, err := hashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	u.PasswordHash = hash
+	s.users[username] = u
+	return s.saveUsersLocked()
+}
+
 // EnsureMockAdmin seeds a default admin/weplane account in mock mode if no users exist.
 func (s *Store) EnsureMockAdmin() error {
 	if s.HasUsers() {
