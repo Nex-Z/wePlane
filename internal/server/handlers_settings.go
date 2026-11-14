@@ -7,9 +7,13 @@ import (
 
 	"weplane/internal/config"
 	"weplane/internal/notify"
+	"weplane/internal/version"
 )
 
 type runtimeInfoResponse struct {
+	Version      string `json:"version"`
+	Commit       string `json:"commit"`
+	BuildTime    string `json:"buildTime"`
 	Addr         string `json:"addr"`
 	DataDir      string `json:"dataDir"`
 	DockerSocket string `json:"dockerSocket"`
@@ -23,6 +27,9 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"settings": s.settings.Get(),
 		"runtime": runtimeInfoResponse{
+			Version:      version.Version,
+			Commit:       version.Commit,
+			BuildTime:    version.BuildTime,
 			Addr:         s.cfg.Addr,
 			DataDir:      s.cfg.DataDir,
 			DockerSocket: s.cfg.DockerSocket,

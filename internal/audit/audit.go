@@ -2,12 +2,14 @@ package audit
 
 import (
 	"bufio"
+	"database/sql"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"weplane/internal/db"
 )
 
 type Entry struct {
@@ -22,33 +24,95 @@ type Entry struct {
 
 type Logger struct {
 	mu   sync.Mutex
-	path string
+	conn *sql.DB
 }
 
 func NewLogger(dataDir string) (*Logger, error) {
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+	conn, err := db.Open(dataDir)
+	if err != nil {
 		return nil, err
 	}
-	return &Logger{path: filepath.Join(dataDir, "audit.jsonl")}, nil
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS audit_logs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts INTEGER NOT NULL,
+			user TEXT NOT NULL,
+			remote_ip TEXT NOT NULL,
+			action TEXT NOT NULL,
+			target TEXT NOT NULL,
+			status TEXT NOT NULL,
+			detail TEXT NOT NULL DEFAULT ''
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_logs(ts DESC, id DESC);`,
+	}
+	for _, stmt := range stmts {
+		if _, err := conn.Exec(stmt); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+	}
+
+	l := &Logger{conn: conn}
+	l.migrateLegacyJSONL(filepath.Join(dataDir, "audit.jsonl"))
+	return l, nil
+}
+
+func (l *Logger) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.conn != nil {
+		err := l.conn.Close()
+		l.conn = nil
+		return err
+	}
+	return nil
+}
+
+func (l *Logger) migrateLegacyJSONL(legacyPath string) {
+	var count int
+	if err := l.conn.QueryRow(`SELECT COUNT(*) FROM audit_logs`).Scan(&count); err != nil || count > 0 {
+		return
+	}
+	f, err := os.Open(legacyPath)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	tx, err := l.conn.Begin()
+	if err != nil {
+		return
+	}
+	stmt, err := tx.Prepare(`INSERT INTO audit_logs (ts, user, remote_ip, action, target, status, detail) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		_ = tx.Rollback()
+		return
+	}
+	defer stmt.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var e Entry
+		if err := json.Unmarshal(scanner.Bytes(), &e); err == nil {
+			_, _ = stmt.Exec(e.Timestamp.Unix(), e.User, e.RemoteIP, e.Action, e.Target, e.Status, e.Detail)
+		}
+	}
+	_ = tx.Commit()
 }
 
 func (l *Logger) Record(e Entry) {
 	if e.Timestamp.IsZero() {
 		e.Timestamp = time.Now()
 	}
-	b, err := json.Marshal(e)
-	if err != nil {
-		return
-	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-
-	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
+	if l.conn == nil {
 		return
 	}
-	defer f.Close()
-	_, _ = f.Write(append(b, '\n'))
+	_, _ = l.conn.Exec(
+		`INSERT INTO audit_logs (ts, user, remote_ip, action, target, status, detail) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		e.Timestamp.Unix(), e.User, e.RemoteIP, e.Action, e.Target, e.Status, e.Detail,
+	)
 }
 
 func (l *Logger) Recent(limit int) ([]Entry, error) {
@@ -57,31 +121,27 @@ func (l *Logger) Recent(limit int) ([]Entry, error) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-
-	f, err := os.Open(l.path)
-	if errors.Is(err, os.ErrNotExist) {
+	if l.conn == nil {
 		return []Entry{}, nil
 	}
+
+	rows, err := l.conn.Query(
+		`SELECT ts, user, remote_ip, action, target, status, detail FROM audit_logs ORDER BY id DESC LIMIT ?`,
+		limit,
+	)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer rows.Close()
 
-	var all []Entry
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
+	out := make([]Entry, 0, limit)
+	for rows.Next() {
+		var ts int64
 		var e Entry
-		if err := json.Unmarshal(scanner.Bytes(), &e); err == nil {
-			all = append(all, e)
+		if err := rows.Scan(&ts, &e.User, &e.RemoteIP, &e.Action, &e.Target, &e.Status, &e.Detail); err == nil {
+			e.Timestamp = time.Unix(ts, 0)
+			out = append(out, e)
 		}
 	}
-
-	if len(all) > limit {
-		all = all[len(all)-limit:]
-	}
-	// Reverse so newest appears first.
-	for i, j := 0, len(all)-1; i < j; i, j = i+1, j-1 {
-		all[i], all[j] = all[j], all[i]
-	}
-	return all, nil
+	return out, nil
 }

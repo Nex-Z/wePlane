@@ -533,7 +533,19 @@ export function SettingsView({ username }: SettingsViewProps) {
           </div>
         </div>
 
-        <dl className="grid gap-4 text-xs sm:grid-cols-2 lg:grid-cols-3">
+        <dl className="grid gap-4 text-xs sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <dt className="text-slate-400">软件版本</dt>
+            <dd className="mt-1 font-mono font-medium">
+              {runtime ? `${runtime.version} (${runtime.commit})` : '--'}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-slate-400">构建 / 更新时间</dt>
+            <dd className="mt-1 font-mono font-medium tabular-nums">
+              {runtime?.buildTime ?? '--'}
+            </dd>
+          </div>
           <div>
             <dt className="text-slate-400">监听地址</dt>
             <dd className="mt-1 font-mono font-medium">{runtime?.addr ?? '--'}</dd>

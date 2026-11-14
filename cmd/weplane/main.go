@@ -50,6 +50,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("init auth store: %v", err)
 	}
+	defer authStore.Close()
 	if cfg.MockMode {
 		if err := authStore.EnsureMockAdmin(); err != nil {
 			log.Fatalf("seed mock admin: %v", err)
@@ -60,6 +61,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("init audit logger: %v", err)
 	}
+	defer auditLogger.Close()
 
 	var provider platform.Provider
 	if cfg.MockMode {
@@ -74,7 +76,8 @@ func main() {
 	}
 	defer provider.Close()
 
-	hist := metrics.NewHistoryStore(provider.IsMock())
+	hist := metrics.NewHistoryStore(provider.IsMock(), cfg.DataDir)
+	defer hist.Close()
 	samplerCtx, samplerCancel := context.WithCancel(context.Background())
 	defer samplerCancel()
 	hist.StartSampler(samplerCtx, provider.System(), 10*time.Second)

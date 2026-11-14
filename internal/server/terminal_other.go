@@ -34,7 +34,7 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 
 	s.recordAudit(r, "terminal.open", "mock-shell", nil)
 
-	prompt := "\x1b[36mroot@weplane-mock\x1b[0m:\x1b[34m~\x1b[0m# "
+	prompt := "\x1b[36mroot@weplane-mock\x1b[0m:\x1b[34m/\x1b[0m# "
 	welcome := "\r\nwePlane Web Terminal (Mock 模式)\r\n输入 \x1b[33mhelp\x1b[0m 查看模拟命令，生产 Linux 环境将直连 /bin/bash PTY。\r\n\r\n" + prompt
 	_ = conn.Write(ctx, websocket.MessageText, []byte(welcome))
 
@@ -95,7 +95,7 @@ func evalMockCommand(cmd string) string {
 	case cmd == "whoami":
 		return "root\r\n"
 	case cmd == "pwd":
-		return "/root\r\n"
+		return "/\r\n"
 	case cmd == "ls":
 		return "compose.yml  nginx.conf  weplane.log  README.md\r\n"
 	case cmd == "uname -a":

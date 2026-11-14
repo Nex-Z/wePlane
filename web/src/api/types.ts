@@ -242,6 +242,9 @@ export interface PanelSettings {
 }
 
 export interface RuntimeInfo {
+  version: string
+  commit: string
+  buildTime: string
   addr: string
   dataDir: string
   dockerSocket: string

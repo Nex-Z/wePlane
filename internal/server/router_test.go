@@ -30,7 +30,9 @@ func newTestServer(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatalf("audit.NewLogger: %v", err)
 	}
-	return server.New(cfg, mock.NewProvider(), authStore, auditLogger).Handler()
+	srv := server.New(cfg, mock.NewProvider(), authStore, auditLogger)
+	t.Cleanup(func() { _ = srv.Close() })
+	return srv.Handler()
 }
 
 func TestAuthAndProtectedEndpoints(t *testing.T) {

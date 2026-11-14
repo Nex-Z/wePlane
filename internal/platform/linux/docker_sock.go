@@ -144,12 +144,29 @@ func (c *containerProvider) ListContainers(ctx context.Context, all bool) ([]pla
 	}
 
 	sort.Slice(out, func(i, j int) bool {
+		ri, rj := containerStateRank(out[i]), containerStateRank(out[j])
+		if ri != rj {
+			return ri < rj
+		}
 		if out[i].ComposeProject != out[j].ComposeProject {
 			return out[i].ComposeProject < out[j].ComposeProject
 		}
 		return out[i].Name < out[j].Name
 	})
 	return out, nil
+}
+
+func containerStateRank(c platform.ContainerSummary) int {
+	if c.State == "running" {
+		return 0
+	}
+	if c.State == "dead" || c.State == "removing" || c.State == "paused" || c.State == "restarting" {
+		return 1
+	}
+	if c.State == "exited" && c.Status != "" && !strings.Contains(c.Status, "Exited (0)") {
+		return 1
+	}
+	return 2
 }
 
 type dockerInspectEntry struct {

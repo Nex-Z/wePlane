@@ -9,12 +9,12 @@
 - **Docker 容器 & Compose**：容器生命周期管理（启动、停止、重启、删除）、创建新容器、网络与存储卷展示、实时日志流，以及自定义目录部署与管理 Docker Compose 项目。
 - **文件管理**：目录浏览与面包屑导航、在线文本编辑（≤ 1 MB）、新建目录/文件、上传、下载、二次确认删除（Mock 模式下隔离在 `<data-dir>/mock_fs`）。
 - **Web 终端**：基于 `@xterm/xterm` + WebSocket，Linux 生产环境直连 `/bin/bash -l` PTY，Mock 模式下提供交互式模拟 Shell。
-- **审计日志**：记录登录、密码修改、设置变更、服务/容器/Compose/文件/终端等关键操作并支持分类筛选与搜索，持久化于 `<data-dir>/audit.jsonl`。
-- **系统设置**：修改管理员密码、资源告警阈值与刷新/日志偏好、Bark 推送通知（支持官方或自建服务端与测试推送）、运行环境信息查看。
+- **审计日志**：记录登录、密码修改、设置变更、服务/容器/Compose/文件/终端等关键操作并支持分类筛选与搜索，持久化于 `<data-dir>/weplane.db`。
+- **系统设置**：修改管理员密码、资源告警阈值与刷新/日志偏好、Bark 推送通知（支持官方或自建服务端与测试推送）、软件版本与运行环境信息查看。
 
 ## 技术栈
 
-- **后端**：Go 1.26、`chi/v5`、`godbus/dbus/v5`、`coder/websocket`、`creack/pty`、`golang.org/x/crypto/argon2`
+- **后端**：Go 1.26、`chi/v5`、`godbus/dbus/v5`、`coder/websocket`、`creack/pty`、`modernc.org/sqlite`、`golang.org/x/crypto/argon2`
 - **前端**：React 19、TypeScript、Vite 8、Tailwind CSS 4、`@tanstack/react-table`、`recharts`、`@xterm/xterm`、`lucide-react`
 
 ## 本地开发（Windows Mock 模式）
@@ -90,11 +90,11 @@ sudo systemctl status weplane
 
 ### 3. 升级更新
 
-持久化数据（`users.json`、`settings.json`、`audit.jsonl`、`compose/`）均保存在 `/srv/services/weplane/data`，替换二进制文件不会丢失数据：
+持久化数据（`weplane.db` 中的用户、会话、设置、审计日志、监控历史，以及 `compose/`）均保存在 `/srv/services/weplane/data`，替换二进制文件不会丢失数据（首次从旧版本升级时会自动导入原有 `users.json`、`settings.json`、`audit.jsonl`）：
 
 ```bash
-sudo systemctl stop weplane
-sudo cp weplane-linux-amd64 /srv/services/weplane/weplane
-sudo chmod +x /srv/services/weplane/weplane
+sudo systemctl stop weplane && \
+sudo cp weplane-linux-amd64 /srv/services/weplane/weplane && \
+sudo chmod +x /srv/services/weplane/weplane && \
 sudo systemctl start weplane
 ```

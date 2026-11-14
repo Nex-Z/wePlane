@@ -188,11 +188,10 @@ export function OverviewView({
           load1: data.load1,
           memPercent: data.memory.usedPercent,
           swapPercent: data.swap.usedPercent,
-          diskReadMBs: Math.round(((data.diskIO?.readBytesPerSec ?? 0) / (1024 * 1024)) * 10) / 10,
-          diskWriteMBs:
-            Math.round(((data.diskIO?.writeBytesPerSec ?? 0) / (1024 * 1024)) * 10) / 10,
-          netRxKBs: Math.round((primaryNet?.rxBytesPerSec ?? 0) / 1024),
-          netTxKBs: Math.round((primaryNet?.txBytesPerSec ?? 0) / 1024),
+          diskReadMBs: (data.diskIO?.readBytesPerSec ?? 0) / (1024 * 1024),
+          diskWriteMBs: (data.diskIO?.writeBytesPerSec ?? 0) / (1024 * 1024),
+          netRxKBs: (primaryNet?.rxBytesPerSec ?? 0) / 1024,
+          netTxKBs: (primaryNet?.txBytesPerSec ?? 0) / 1024,
         }
         setLiveSpark((prev) => [...prev.slice(-23), row])
         if (range === '5m') {
@@ -238,6 +237,28 @@ export function OverviewView({
   const netHealth: HealthLevel = primaryNet && !primaryNet.isUp ? 'critical' : 'healthy'
   const totalNetRx = snap?.networks?.reduce((acc, n) => acc + n.rxBytesPerSec, 0) ?? 0
   const totalNetTx = snap?.networks?.reduce((acc, n) => acc + n.txBytesPerSec, 0) ?? 0
+
+  const { diskUnit, netUnit, scaledChartData } = useMemo(() => {
+    let maxDiskMBs = 0
+    let maxNetKBs = 0
+    for (const p of chartData) {
+      maxDiskMBs = Math.max(maxDiskMBs, p.diskReadMBs, p.diskWriteMBs)
+      maxNetKBs = Math.max(maxNetKBs, p.netRxKBs, p.netTxKBs)
+    }
+    const useDiskMB = maxDiskMBs >= 1
+    const useNetMB = maxNetKBs >= 1024
+    const dUnit = useDiskMB ? 'MB/s' : 'KB/s'
+    const nUnit = useNetMB ? 'MB/s' : 'KB/s'
+
+    const rows = chartData.map((p) => ({
+      ...p,
+      diskRead: Number((useDiskMB ? p.diskReadMBs : p.diskReadMBs * 1024).toFixed(useDiskMB ? 2 : 1)),
+      diskWrite: Number((useDiskMB ? p.diskWriteMBs : p.diskWriteMBs * 1024).toFixed(useDiskMB ? 2 : 1)),
+      netRx: Number((useNetMB ? p.netRxKBs / 1024 : p.netRxKBs).toFixed(useNetMB ? 2 : 1)),
+      netTx: Number((useNetMB ? p.netTxKBs / 1024 : p.netTxKBs).toFixed(useNetMB ? 2 : 1)),
+    }))
+    return { diskUnit: dUnit, netUnit: nUnit, scaledChartData: rows }
+  }, [chartData])
 
   return (
     <div className="space-y-5">
@@ -518,18 +539,18 @@ export function OverviewView({
         </ChartCard>
 
         <ChartCard
-          title="硬盘读写 I/O 趋势 (MB/s)"
+          title={`硬盘读写 I/O 趋势 (${diskUnit})`}
           icon={<HardDrive className="h-4 w-4 text-emerald-500" />}
         >
-          <AreaChart data={chartData}>
+          <AreaChart data={scaledChartData}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.15)" />
             <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="#94a3b8" minTickGap={28} />
             <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" />
             <Tooltip contentStyle={tooltipStyle} />
             <Area
               type="monotone"
-              dataKey="diskReadMBs"
-              name="读取 MB/s"
+              dataKey="diskRead"
+              name={`读取 ${diskUnit}`}
               stroke="#10b981"
               strokeWidth={2}
               fill="#10b981"
@@ -538,8 +559,8 @@ export function OverviewView({
             />
             <Area
               type="monotone"
-              dataKey="diskWriteMBs"
-              name="写入 MB/s"
+              dataKey="diskWrite"
+              name={`写入 ${diskUnit}`}
               stroke="#f97316"
               strokeWidth={2}
               fill="#f97316"
@@ -550,18 +571,18 @@ export function OverviewView({
         </ChartCard>
 
         <ChartCard
-          title="网络吞吐趋势 (KB/s)"
+          title={`网络吞吐趋势 (${netUnit})`}
           icon={<Network className="h-4 w-4 text-amber-500" />}
         >
-          <AreaChart data={chartData}>
+          <AreaChart data={scaledChartData}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.15)" />
             <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="#94a3b8" minTickGap={28} />
             <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" />
             <Tooltip contentStyle={tooltipStyle} />
             <Area
               type="monotone"
-              dataKey="netRxKBs"
-              name="下行 KB/s"
+              dataKey="netRx"
+              name={`下行 ${netUnit}`}
               stroke="#06b6d4"
               strokeWidth={2}
               fill="#06b6d4"
@@ -570,8 +591,8 @@ export function OverviewView({
             />
             <Area
               type="monotone"
-              dataKey="netTxKBs"
-              name="上行 KB/s"
+              dataKey="netTx"
+              name={`上行 ${netUnit}`}
               stroke="#f59e0b"
               strokeWidth={2}
               fill="#f59e0b"

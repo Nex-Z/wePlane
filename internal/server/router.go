@@ -37,7 +37,7 @@ func New(cfg config.Config, provider platform.Provider, authStore *auth.Store, a
 	if len(history) > 0 && history[0] != nil {
 		hist = history[0]
 	} else {
-		hist = metrics.NewHistoryStore(provider.IsMock())
+		hist = metrics.NewHistoryStore(provider.IsMock(), cfg.DataDir)
 	}
 	s := &Server{
 		cfg:      cfg,
@@ -54,6 +54,18 @@ func New(cfg config.Config, provider platform.Provider, authStore *auth.Store, a
 
 func (s *Server) Handler() http.Handler {
 	return s.router
+}
+
+func (s *Server) Close() error {
+	var firstErr error
+	for _, c := range []interface{ Close() error }{s.history, s.settings, s.auth, s.audit} {
+		if c != nil {
+			if err := c.Close(); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
 }
 
 func (s *Server) mountRoutes() {

@@ -39,7 +39,8 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, shell, "-l")
+	cmd := exec.CommandContext(ctx, shell)
+	cmd.Dir = "/"
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})

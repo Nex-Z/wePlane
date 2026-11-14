@@ -111,17 +111,24 @@ func (s *serviceProvider) ListUnits(ctx context.Context) ([]platform.ServiceUnit
 	}
 
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].ActiveState != out[j].ActiveState {
-			if out[i].ActiveState == "failed" {
-				return true
-			}
-			if out[j].ActiveState == "failed" {
-				return false
-			}
+		ri, rj := serviceStateRank(out[i].ActiveState), serviceStateRank(out[j].ActiveState)
+		if ri != rj {
+			return ri < rj
 		}
 		return out[i].Name < out[j].Name
 	})
 	return out, nil
+}
+
+func serviceStateRank(activeState string) int {
+	switch activeState {
+	case "active":
+		return 0
+	case "failed":
+		return 1
+	default:
+		return 2
+	}
 }
 
 func (s *serviceProvider) GetUnit(ctx context.Context, name string) (*platform.ServiceDetail, error) {

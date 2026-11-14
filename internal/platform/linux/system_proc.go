@@ -725,21 +725,44 @@ func readProcUser(statusPath string, uidMap map[string]string) string {
 }
 
 func readIPv4Addresses() []string {
-	addrs, err := net.InterfaceAddrs()
+	ifaces, err := net.Interfaces()
 	if err != nil {
 		return nil
 	}
 	var out []string
-	for _, a := range addrs {
-		ipNet, ok := a.(*net.IPNet)
-		if !ok || ipNet.IP.IsLoopback() {
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
 			continue
 		}
-		if v4 := ipNet.IP.To4(); v4 != nil {
-			out = append(out, v4.String())
+		if isVirtualContainerInterface(iface.Name) {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipNet, ok := a.(*net.IPNet)
+			if !ok || ipNet.IP.IsLoopback() {
+				continue
+			}
+			if v4 := ipNet.IP.To4(); v4 != nil {
+				out = append(out, v4.String())
+			}
 		}
 	}
 	return out
+}
+
+func isVirtualContainerInterface(name string) bool {
+	lower := strings.ToLower(name)
+	prefixes := []string{"docker", "br-", "veth", "virbr", "cni", "flannel", "kube", "podman"}
+	for _, p := range prefixes {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func int8SliceToString(s []int8) string {

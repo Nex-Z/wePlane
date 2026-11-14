@@ -106,12 +106,29 @@ func (c *containerProvider) ListContainers(_ context.Context, all bool) ([]platf
 		out = append(out, ctr.ContainerSummary)
 	}
 	sort.Slice(out, func(i, j int) bool {
+		ri, rj := containerStateRank(out[i]), containerStateRank(out[j])
+		if ri != rj {
+			return ri < rj
+		}
 		if out[i].ComposeProject != out[j].ComposeProject {
 			return out[i].ComposeProject < out[j].ComposeProject
 		}
 		return out[i].Name < out[j].Name
 	})
 	return out, nil
+}
+
+func containerStateRank(c platform.ContainerSummary) int {
+	if c.State == "running" {
+		return 0
+	}
+	if c.State == "dead" || c.State == "removing" || c.State == "paused" || c.State == "restarting" {
+		return 1
+	}
+	if c.State == "exited" && c.Status != "" && !strings.Contains(c.Status, "Exited (0)") {
+		return 1
+	}
+	return 2
 }
 
 func (c *containerProvider) InspectContainer(_ context.Context, id string) (*platform.ContainerDetail, error) {

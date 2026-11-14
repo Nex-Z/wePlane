@@ -3,6 +3,7 @@ package auth
 import (
 	"crypto/rand"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"weplane/internal/db"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -31,61 +34,87 @@ type Session struct {
 }
 
 type Store struct {
-	mu        sync.RWMutex
-	usersFile string
-	users     map[string]User
-	sessions  map[string]Session
+	mu   sync.RWMutex
+	conn *sql.DB
 }
 
 func NewStore(dataDir string) (*Store, error) {
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create data dir: %w", err)
+	conn, err := db.Open(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("open auth db: %w", err)
 	}
-	s := &Store{
-		usersFile: filepath.Join(dataDir, "users.json"),
-		users:     make(map[string]User),
-		sessions:  make(map[string]Session),
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS users (
+			username TEXT PRIMARY KEY,
+			password_hash TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS sessions (
+			token TEXT PRIMARY KEY,
+			username TEXT NOT NULL,
+			expires_at INTEGER NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);`,
 	}
-	if err := s.loadUsers(); err != nil {
-		return nil, err
+	for _, stmt := range stmts {
+		if _, err := conn.Exec(stmt); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("init auth schema: %w", err)
+		}
 	}
+
+	s := &Store{conn: conn}
+	s.migrateLegacyUsers(filepath.Join(dataDir, "users.json"))
+	_, _ = s.conn.Exec(`DELETE FROM sessions WHERE expires_at <= ?`, time.Now().Unix())
 	return s, nil
 }
 
-func (s *Store) loadUsers() error {
-	b, err := os.ReadFile(s.usersFile)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
+func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conn != nil {
+		err := s.conn.Close()
+		s.conn = nil
 		return err
-	}
-	var list []User
-	if err := json.Unmarshal(b, &list); err != nil {
-		return err
-	}
-	for _, u := range list {
-		s.users[u.Username] = u
 	}
 	return nil
 }
 
-func (s *Store) saveUsersLocked() error {
-	list := make([]User, 0, len(s.users))
-	for _, u := range s.users {
-		list = append(list, u)
+func (s *Store) migrateLegacyUsers(legacyFile string) {
+	if s.HasUsers() {
+		return
 	}
-	b, err := json.MarshalIndent(list, "", "  ")
+	b, err := os.ReadFile(legacyFile)
 	if err != nil {
-		return err
+		return
 	}
-	return os.WriteFile(s.usersFile, b, 0o600)
+	var list []User
+	if err := json.Unmarshal(b, &list); err != nil || len(list) == 0 {
+		return
+	}
+	for _, u := range list {
+		created := u.CreatedAt.Unix()
+		if created <= 0 {
+			created = time.Now().Unix()
+		}
+		_, _ = s.conn.Exec(
+			`INSERT OR IGNORE INTO users (username, password_hash, created_at) VALUES (?, ?, ?)`,
+			u.Username, u.PasswordHash, created,
+		)
+	}
 }
 
 func (s *Store) HasUsers() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.users) > 0
+	if s.conn == nil {
+		return false
+	}
+	var count int
+	if err := s.conn.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
+		return false
+	}
+	return count > 0
 }
 
 func (s *Store) CreateOrUpdateUser(username, password string) error {
@@ -99,15 +128,14 @@ func (s *Store) CreateOrUpdateUser(username, password string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.users[username] = User{
-		Username:     username,
-		PasswordHash: hash,
-		CreatedAt:    time.Now(),
-	}
-	return s.saveUsersLocked()
+	_, err = s.conn.Exec(
+		`INSERT OR REPLACE INTO users (username, password_hash, created_at) VALUES (?, ?, ?)`,
+		username, hash, time.Now().Unix(),
+	)
+	return err
 }
 
-// ChangePassword verifies oldPassword and updates the user's password hash on disk.
+// ChangePassword verifies oldPassword and updates the user's password hash in SQLite.
 func (s *Store) ChangePassword(username, oldPassword, newPassword string) error {
 	if len(newPassword) < 6 {
 		return errors.New("新密码长度不能少于 6 位")
@@ -115,20 +143,23 @@ func (s *Store) ChangePassword(username, oldPassword, newPassword string) error 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	u, ok := s.users[username]
-	if !ok {
+	var currentHash string
+	err := s.conn.QueryRow(`SELECT password_hash FROM users WHERE username = ?`, username).Scan(&currentHash)
+	if errors.Is(err, sql.ErrNoRows) {
 		return errors.New("用户不存在")
 	}
-	if !verifyPassword(oldPassword, u.PasswordHash) {
+	if err != nil {
+		return err
+	}
+	if !verifyPassword(oldPassword, currentHash) {
 		return errors.New("原密码不正确")
 	}
 	hash, err := hashPassword(newPassword)
 	if err != nil {
 		return err
 	}
-	u.PasswordHash = hash
-	s.users[username] = u
-	return s.saveUsersLocked()
+	_, err = s.conn.Exec(`UPDATE users SET password_hash = ? WHERE username = ?`, hash, username)
+	return err
 }
 
 // EnsureMockAdmin seeds a default admin/weplane account in mock mode if no users exist.
@@ -141,9 +172,10 @@ func (s *Store) EnsureMockAdmin() error {
 
 func (s *Store) Authenticate(username, password string) (Session, error) {
 	s.mu.RLock()
-	u, ok := s.users[username]
+	var hash string
+	err := s.conn.QueryRow(`SELECT password_hash FROM users WHERE username = ?`, username).Scan(&hash)
 	s.mu.RUnlock()
-	if !ok || !verifyPassword(password, u.PasswordHash) {
+	if err != nil || !verifyPassword(password, hash) {
 		return Session{}, errors.New("invalid username or password")
 	}
 
@@ -152,15 +184,22 @@ func (s *Store) Authenticate(username, password string) (Session, error) {
 		return Session{}, err
 	}
 	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
+	expires := time.Now().Add(24 * time.Hour)
 	sess := Session{
 		Token:     token,
-		Username:  u.Username,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		Username:  username,
+		ExpiresAt: expires,
 	}
 
 	s.mu.Lock()
-	s.sessions[token] = sess
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	_, err = s.conn.Exec(
+		`INSERT OR REPLACE INTO sessions (token, username, expires_at) VALUES (?, ?, ?)`,
+		sess.Token, sess.Username, sess.ExpiresAt.Unix(),
+	)
+	if err != nil {
+		return Session{}, err
+	}
 	return sess, nil
 }
 
@@ -169,15 +208,23 @@ func (s *Store) GetSession(token string) (Session, bool) {
 		return Session{}, false
 	}
 	s.mu.RLock()
-	sess, ok := s.sessions[token]
+	var username string
+	var expiresUnix int64
+	err := s.conn.QueryRow(`SELECT username, expires_at FROM sessions WHERE token = ?`, token).Scan(&username, &expiresUnix)
 	s.mu.RUnlock()
-	if !ok || time.Now().After(sess.ExpiresAt) {
-		if ok {
-			s.DeleteSession(token)
-		}
+	if err != nil {
 		return Session{}, false
 	}
-	return sess, true
+	expiresAt := time.Unix(expiresUnix, 0)
+	if time.Now().After(expiresAt) {
+		s.DeleteSession(token)
+		return Session{}, false
+	}
+	return Session{
+		Token:     token,
+		Username:  username,
+		ExpiresAt: expiresAt,
+	}, true
 }
 
 func (s *Store) DeleteSession(token string) {
@@ -185,8 +232,10 @@ func (s *Store) DeleteSession(token string) {
 		return
 	}
 	s.mu.Lock()
-	delete(s.sessions, token)
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	if s.conn != nil {
+		_, _ = s.conn.Exec(`DELETE FROM sessions WHERE token = ?`, token)
+	}
 }
 
 func hashPassword(password string) (string, error) {

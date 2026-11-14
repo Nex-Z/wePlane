@@ -12,11 +12,13 @@
 ## 目录结构
 
 - `cmd/weplane/`：程序入口与 CLI 参数（`serve` / `user`）
-- `internal/auth/`：Argon2id 用户认证与内存会话（持久化 `users.json`）
-- `internal/audit/`：JSONL 审计日志（持久化 `audit.jsonl`）
-- `internal/config/`：启动配置与面板设置存储（持久化 `settings.json`）
-- `internal/metrics/`：系统历史采样存储（内存时间序列）
+- `internal/db/`：纯 Go SQLite（`modernc.org/sqlite`）连接封装（`<DataDir>/weplane.db`，WAL 模式）
+- `internal/auth/`：Argon2id 用户认证与持久化会话（SQLite `users` / `sessions` 表，兼容迁移 `users.json`）
+- `internal/audit/`：审计日志（SQLite `audit_logs` 表，兼容迁移 `audit.jsonl`）
+- `internal/config/`：启动配置与面板设置存储（SQLite `settings` 表，兼容迁移 `settings.json`）
+- `internal/metrics/`：系统历史采样存储（SQLite `metrics_raw` 24h / `metrics_hourly` 180d）
 - `internal/notify/`：通知推送（目前支持 Bark v2 JSON API）
+- `internal/version/`：构建版本元数据（由 `scripts/build.ps1` 通过 `-ldflags` 注入）
 - `internal/platform/`：OS 抽象接口（`SystemProvider`、`ServiceProvider`、`ContainerProvider`）
 - `internal/server/`：`chi` HTTP 路由、REST API、SSE 指标流、WebSocket 日志与终端
 - `internal/webembed/`：`go:embed` 前端静态资源容器
@@ -39,5 +41,5 @@
 
 - 部署目录：`/srv/services/weplane`
 - 可执行文件：`/srv/services/weplane/weplane`
-- 数据目录：`/srv/services/weplane/data`（包含 `users.json`、`settings.json`、`audit.jsonl`、`compose/`）
+- 数据目录：`/srv/services/weplane/data`（包含 `weplane.db`、`compose/`）
 - systemd 服务名：`weplane.service`（`/etc/systemd/system/weplane.service`）
