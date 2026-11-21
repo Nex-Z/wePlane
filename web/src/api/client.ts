@@ -155,6 +155,7 @@ export const api = {
       ),
   },
   audit: {
+    search: (params: URLSearchParams) => request<AuditEntry[]>(`/api/v1/audit?${params}`),
     recent: (limit = 50) => request<AuditEntry[]>(`/api/v1/audit?limit=${limit}`),
   },
   settings: {
@@ -180,22 +181,24 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ path, content }),
       }),
+    create: (path: string) => request("/api/v1/files/content", {method: "POST", body: JSON.stringify({path})}),
     mkdir: (path: string) =>
       request<{ path: string; ok: boolean }>('/api/v1/files/mkdir', {
         method: 'POST',
         body: JSON.stringify({ path }),
       }),
-    upload: async (dir: string, file: File) => {
+    upload: async (dir: string, file: File, overwrite = false) => {
       const form = new FormData()
       form.append('file', file)
       const res = await fetch(`/api/v1/files/upload?dir=${encodeURIComponent(dir)}`, {
         method: 'POST',
         credentials: 'same-origin',
+        headers: overwrite ? { "X-Weplane-Confirm": "true" } : undefined,
         body: form,
       })
       const json = (await res.json()) as ApiEnvelope<{ path: string; ok: boolean }>
       if (!res.ok) {
-        throw new Error(json.error?.message || `HTTP ${res.status}`)
+        throw Object.assign(new Error(json.error?.message || `HTTP ${res.status}`), {status: res.status})
       }
       return json.data as { path: string; ok: boolean }
     },

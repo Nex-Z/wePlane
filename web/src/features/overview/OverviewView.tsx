@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -140,7 +140,7 @@ function toLocalDateStr(d: Date): string {
 export function OverviewView({
   onNavigate,
 }: {
-  onNavigate?: (tab: 'services' | 'containers') => void
+  onNavigate?: (tab: 'services' | 'containers', target?: string) => void
 }) {
   const [host, setHost] = useState<HostInfo | null>(null)
   const [snap, setSnap] = useState<MetricsSnapshot | null>(null)
@@ -151,15 +151,25 @@ export function OverviewView({
   const [liveSpark, setLiveSpark] = useState<ChartRow[]>([])
   const [inspectorTab, setInspectorTab] = useState<InspectorTab | null>(null)
 
+  const sequence = useRef(0)
+  const [historyStatus,setHistoryStatus] = useState('加载中…')
+  const [stale,setStale] = useState(false)
+  const liveRange = useRef(range)
   const loadHistory = useCallback(
     async (targetRange: RangePreset, fromISO?: string, toISO?: string) => {
+      const seq = ++sequence.current
+      liveRange.current = targetRange
+      setChartData([])
+      setHistoryStatus('加载中…')
       try {
         const pts = await api.system.history(
           targetRange === 'custom' ? { from: fromISO, to: toISO } : { range: targetRange },
         )
+        if(seq !== sequence.current) return
+        setHistoryStatus(pts.length || targetRange === "5m" ? "" : "此区间暂无采样")
         setChartData(pts.map((p) => toChartRow(p, targetRange)))
       } catch (err) {
-        console.error(err)
+        if(seq === sequence.current) setHistoryStatus(err instanceof Error ? err.message : "历史数据加载失败")
       }
     },
     [],
@@ -172,9 +182,14 @@ export function OverviewView({
 
   useEffect(() => {
     const es = new EventSource('/api/v1/events/metrics', { withCredentials: true })
+    let timer: number
+    es.onerror = () => setStale(true)
     es.addEventListener('metrics', (evt) => {
       try {
         const data = JSON.parse((evt as MessageEvent).data) as MetricsSnapshot
+        setStale(false)
+        clearTimeout(timer)
+        timer = window.setTimeout(() => setStale(true), 8000)
         setSnap(data)
         const primaryNet = data.networks?.[0]
         const row: ChartRow = {
@@ -194,15 +209,15 @@ export function OverviewView({
           netTxKBs: (primaryNet?.txBytesPerSec ?? 0) / 1024,
         }
         setLiveSpark((prev) => [...prev.slice(-23), row])
-        if (range === '5m') {
+        if (liveRange.current === '5m') {
           setChartData((prev) => [...prev.slice(-89), row])
         }
       } catch {
         // Ignore parse error
       }
     })
-    return () => es.close()
-  }, [range])
+    return () => { clearTimeout(timer); es.close() }
+  }, [])
 
   const handlePresetClick = (preset: Exclude<RangePreset, 'custom'>) => {
     setRange(preset)
@@ -212,12 +227,18 @@ export function OverviewView({
   const handleDateChange = (nextFrom: string, nextTo: string) => {
     setFromDate(nextFrom)
     setToDate(nextTo)
-    if (nextFrom && nextTo) {
+    if (!nextFrom || !nextTo || nextFrom > nextTo) {
+      ++sequence.current
       setRange('custom')
-      const fromISO = new Date(`${nextFrom}T00:00:00`).toISOString()
-      const toISO = new Date(`${nextTo}T23:59:59`).toISOString()
-      void loadHistory('custom', fromISO, toISO)
+      liveRange.current = 'custom'
+      setChartData([])
+      setHistoryStatus('请选择有效的起止日期')
+      return
     }
+    setRange('custom')
+    const fromISO = new Date(`${nextFrom}T00:00:00`).toISOString()
+    const toISO = new Date(`${nextTo}T23:59:59`).toISOString()
+    void loadHistory('custom', fromISO, toISO)
   }
 
   const cpuVal = snap?.cpuUsagePercent ?? 0
@@ -262,6 +283,13 @@ export function OverviewView({
 
   return (
     <div className="space-y-5">
+      <p role="status" className={stale ? "text-sm text-amber-600" : "text-xs text-slate-500"}>
+        {snap ? `${stale ? '数据已过期' : '实时采样'} · 最后采样 ${new Date(snap.timestamp).toLocaleTimeString()}` : stale ? '连接中断，等待采样' : '等待采样…'}
+      </p>
+      <div className="flex flex-wrap gap-2 empty:hidden">
+        {snap?.workloads.failedUnits?.map(name => <button className="rounded-lg border px-3 py-2 text-sm" key={name} onClick={() => onNavigate?.('services',name)}>{name} · 查看日志</button>)}
+        {snap?.workloads.failedContainers?.map(c => <button className="rounded-lg border px-3 py-2 text-sm" key={c.id} onClick={() => onNavigate?.('containers',c.id)}>{c.name} · 查看日志</button>)}
+      </div>
       {/* Alerts Banner */}
       {snap?.alerts && snap.alerts.length > 0 && (
         <div className="space-y-2">
@@ -283,7 +311,7 @@ export function OverviewView({
         </div>
       )}
 
-      {/* Top 4 Telemetry Cards */}
+      {snap && (
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {/* 1. CPU */}
         <div
@@ -437,6 +465,7 @@ export function OverviewView({
         </div>
       </div>
 
+      )}
       {/* Time Range Segmented Bar + Direct Dual Date Picker */}
       <div className="glass-surface flex flex-wrap items-center justify-between gap-2.5 rounded-2xl px-3.5 py-2.5">
         <div className="flex flex-wrap items-center gap-1">
@@ -476,7 +505,8 @@ export function OverviewView({
         </div>
       </div>
 
-      {/* 4 Trend Charts (2x2) */}
+      <p className="text-sm" role="status">{range === 'custom' ? `${fromDate} 至 ${toDate}` : presets.find(p=>p.id===range)?.label} · {historyStatus || '历史趋势'}</p>
+      {!historyStatus && (
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <ChartCard title="CPU 使用率趋势 (%)" icon={<Activity className="h-4 w-4 text-sky-500" />}>
           <AreaChart data={chartData}>
@@ -603,6 +633,7 @@ export function OverviewView({
         </ChartCard>
       </div>
 
+      )}
       {/* Bottom Row: Host Info + Disks */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="glass-surface rounded-2xl p-5">
@@ -700,7 +731,7 @@ export function OverviewView({
                   </div>
                   <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-sm font-semibold tabular-nums">
                     <span className="text-emerald-600 dark:text-emerald-400">
-                      {snap?.workloads.servicesActive ?? 0} 运行
+                      {snap?.workloads.servicesActive ?? '—'} 运行
                     </span>
                     <span
                       className={
@@ -709,10 +740,10 @@ export function OverviewView({
                           : 'font-normal text-slate-400'
                       }
                     >
-                      · {snap?.workloads.servicesFailed ?? 0} 异常
+                      · {snap?.workloads.servicesFailed ?? '—'} 异常
                     </span>
                     <span className="font-normal text-slate-400">
-                      · {snap?.workloads.servicesInactive ?? 0} 停止
+                      · {snap?.workloads.servicesInactive ?? '—'} 停止
                     </span>
                   </div>
                 </div>
@@ -730,7 +761,7 @@ export function OverviewView({
                   </div>
                   <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-sm font-semibold tabular-nums">
                     <span className="text-emerald-600 dark:text-emerald-400">
-                      {snap?.workloads.containersRunning ?? 0} 运行
+                      {snap?.workloads.containersRunning ?? '—'} 运行
                     </span>
                     <span
                       className={
@@ -739,10 +770,10 @@ export function OverviewView({
                           : 'font-normal text-slate-400'
                       }
                     >
-                      · {snap?.workloads.containersError ?? 0} 异常
+                      · {snap?.workloads.containersError ?? '—'} 异常
                     </span>
                     <span className="font-normal text-slate-400">
-                      · {snap?.workloads.containersStopped ?? 0} 停止
+                      · {snap?.workloads.containersStopped ?? '—'} 停止
                     </span>
                   </div>
                 </div>

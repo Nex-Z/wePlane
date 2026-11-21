@@ -59,6 +59,8 @@ export interface SystemAlert {
 }
 
 export interface WorkloadSummary {
+  failedUnits?: string[]
+  failedContainers?: {id:string;name:string}[]
   servicesTotal: number
   servicesActive: number
   servicesInactive: number

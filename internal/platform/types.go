@@ -4,10 +4,10 @@ import "time"
 
 // HostInfo describes static and semi-static properties of the host machine.
 type HostInfo struct {
-	Hostname  string    `json:"hostname"`
-	OS        string    `json:"os"`
-	Kernel    string    `json:"kernel"`
-	Arch      string    `json:"arch"`
+	Hostname    string    `json:"hostname"`
+	OS          string    `json:"os"`
+	Kernel      string    `json:"kernel"`
+	Arch        string    `json:"arch"`
 	CPUModel    string    `json:"cpuModel"`
 	CPUCores    int       `json:"cpuCores"`
 	UptimeSec   uint64    `json:"uptimeSec"`
@@ -62,15 +62,21 @@ type SystemAlert struct {
 }
 
 // WorkloadSummary aggregates service and container counts for the overview.
+type WorkloadObject struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
 type WorkloadSummary struct {
-	ServicesTotal     int `json:"servicesTotal"`
-	ServicesActive    int `json:"servicesActive"`
-	ServicesInactive  int `json:"servicesInactive"`
-	ServicesFailed    int `json:"servicesFailed"`
-	ContainersTotal   int `json:"containersTotal"`
-	ContainersRunning int `json:"containersRunning"`
-	ContainersStopped int `json:"containersStopped"`
-	ContainersError   int `json:"containersError"`
+	FailedUnits       []string         `json:"failedUnits,omitempty"`
+	FailedContainers  []WorkloadObject `json:"failedContainers,omitempty"`
+	ServicesTotal     int              `json:"servicesTotal"`
+	ServicesActive    int              `json:"servicesActive"`
+	ServicesInactive  int              `json:"servicesInactive"`
+	ServicesFailed    int              `json:"servicesFailed"`
+	ContainersTotal   int              `json:"containersTotal"`
+	ContainersRunning int              `json:"containersRunning"`
+	ContainersStopped int              `json:"containersStopped"`
+	ContainersError   int              `json:"containersError"`
 }
 
 // MetricsSnapshot is a point-in-time reading of host resource utilization.
@@ -145,22 +151,22 @@ type ContainerPort struct {
 
 // ContainerSummary represents a Docker container in list views.
 type ContainerSummary struct {
-	ID               string          `json:"id"`
-	ShortID          string          `json:"shortId"`
-	Name             string          `json:"name"`
-	Image            string          `json:"image"`
-	State            string          `json:"state"` // running, exited, paused, restarting
-	Status           string          `json:"status"`
-	CreatedAt        time.Time       `json:"createdAt"`
-	ComposeProject   string          `json:"composeProject,omitempty"`
-	ComposeService   string          `json:"composeService,omitempty"`
+	ID               string           `json:"id"`
+	ShortID          string           `json:"shortId"`
+	Name             string           `json:"name"`
+	Image            string           `json:"image"`
+	State            string           `json:"state"` // running, exited, paused, restarting
+	Status           string           `json:"status"`
+	CreatedAt        time.Time        `json:"createdAt"`
+	ComposeProject   string           `json:"composeProject,omitempty"`
+	ComposeService   string           `json:"composeService,omitempty"`
 	Ports            []ContainerPort  `json:"ports"`
 	Networks         []string         `json:"networks"`
 	Mounts           []ContainerMount `json:"mounts"`
 	CPUPercent       float64          `json:"cpuPercent"`
-	MemoryBytes      uint64          `json:"memoryBytes"`
-	MemoryLimitBytes uint64          `json:"memoryLimitBytes"`
-	IsCritical       bool            `json:"isCritical"`
+	MemoryBytes      uint64           `json:"memoryBytes"`
+	MemoryLimitBytes uint64           `json:"memoryLimitBytes"`
+	IsCritical       bool             `json:"isCritical"`
 }
 
 // ContainerMount describes a bind mount or volume attached to a container.

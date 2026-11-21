@@ -1,3 +1,4 @@
+import {navigate,useParam} from '@/lib/navigation'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   createColumnHelper,
@@ -44,12 +45,12 @@ const subStateLabels: Record<string, string> = {
 
 export function ServicesView() {
   const [units, setUnits] = useState<ServiceUnit[]>([])
-  const [search, setSearch] = useState('')
-  const [filterTab, setFilterTab] = useState<FilterTab>('all')
+  const [search, setSearch] = useParam('q','' as string,true)
+  const [filterTab, setFilterTab] = useParam<FilterTab>('filter','all')
   const [loading, setLoading] = useState(true)
   const [reloading, setReloading] = useState(false)
-  const [selectedName, setSelectedName] = useState<string | null>(null)
-  const [drawerTab, setDrawerTab] = useState<DrawerTab>('logs')
+  const [selectedName, setSelectedName] = useParam('target','' as string)
+  const [drawerTab, setDrawerTab] = useParam<DrawerTab>('detail','logs',true)
   const [detail, setDetail] = useState<ServiceDetail | null>(null)
   const [confirmState, setConfirmState] = useState<{
     unit: ServiceUnit
@@ -80,7 +81,10 @@ export function ServicesView() {
       setDetail(null)
       return
     }
-    api.services.get(selectedName).then(setDetail).catch(console.error)
+    let active=true
+    setDetail(null)
+    api.services.get(selectedName).then(value => {if(active) setDetail(value)}).catch(err => {if(active) setToast(String(err))})
+    return () => {active=false}
   }, [selectedName])
 
   const counts = useMemo(() => {
@@ -125,7 +129,7 @@ export function ServicesView() {
         await api.services.delete(unit.name, confirm)
         setToast(`已删除服务 ${unit.name}`)
         if (selectedName === unit.name) {
-          setSelectedName(null)
+          setSelectedName('')
         }
         await loadUnits()
       } else {
@@ -417,7 +421,11 @@ export function ServicesView() {
 
       <div className="glass-surface overflow-hidden rounded-2xl">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
+          <div className="divide-y md:hidden">{table.getRowModel().rows.map(({original}) => (
+            <button key={original.name} className="flex w-full items-center justify-between gap-2 p-3 text-left" onClick={() => openDrawer(original.name,'logs')}>
+              <span className="min-w-0 break-all text-sm">{original.name}</span><StatusBadge state={original.activeState} /><span className="shrink-0 text-xs">日志</span>
+            </button>))}{!loading && !table.getRowModel().rows.length && <p className="p-3">暂无匹配记录</p>}</div>
+          <table className="hidden w-full text-left text-sm md:table">
             <thead className="border-b border-slate-200/70 bg-slate-500/5 text-xs text-slate-500 dark:border-white/10 dark:text-slate-400">
               {table.getHeaderGroups().map((hg) => (
                 <tr key={hg.id}>
@@ -458,11 +466,12 @@ export function ServicesView() {
       </div>
 
       <DetailDrawer
-        open={selectedName !== null}
+        open={!!selectedName}
         title={selectedName ?? ''}
         subtitle={detail?.description || detail?.fragmentPath}
-        onClose={() => setSelectedName(null)}
+        onClose={() => setSelectedName('')}
       >
+        {selectedName && <button className="mb-3 rounded-lg border px-3 py-2 text-sm" onClick={() => navigate('audit',{target:selectedName,filter:'service'})}>查看对象审计记录</button>}
         {detail && (
           <div className="space-y-5">
             <div className="flex flex-wrap items-center gap-2">

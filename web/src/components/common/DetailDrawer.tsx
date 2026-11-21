@@ -13,7 +13,7 @@ export function DetailDrawer({ open, title, subtitle, onClose, children }: Detai
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape' && !document.querySelector('dialog[open]')) onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)

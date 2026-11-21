@@ -295,6 +295,9 @@ func (s *Server) handleCreateContainer(w http.ResponseWriter, r *http.Request) {
 	if target == "" {
 		target = req.Image
 	}
+	if err == nil && id != "" {
+		target = id
+	}
 	s.recordAudit(r, "container.create", target, err)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "container_create_failed", err.Error())
@@ -342,7 +345,28 @@ func (s *Server) handleControlCompose(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	entries, err := s.audit.Recent(limit)
+	q := r.URL.Query()
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	filter := audit.Filter{Limit: limit, Offset: max(offset, 0), Target: q.Get("target"), Query: q.Get("q"), Category: q.Get("filter"), Actions: q["action"]}
+	if len(filter.Actions) > 100 {
+		writeError(w, 400, "invalid_filter", "动作筛选过多")
+		return
+	}
+	for key, dest := range map[string]*int64{"from": &filter.From, "to": &filter.To} {
+		if raw := q.Get(key); raw != "" {
+			t, err := time.Parse(time.RFC3339, raw)
+			if err != nil {
+				writeError(w, 400, "invalid_date", "日期格式错误")
+				return
+			}
+			*dest = t.Unix()
+		}
+	}
+	if filter.To != 0 && filter.From > filter.To {
+		writeError(w, 400, "invalid_date", "结束日期早于开始日期")
+		return
+	}
+	entries, err := s.audit.Search(filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "audit_error", err.Error())
 		return

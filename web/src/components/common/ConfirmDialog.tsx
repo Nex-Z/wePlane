@@ -1,3 +1,4 @@
+import { useEffect, useId, useRef } from 'react'
 import { AlertTriangle, X } from 'lucide-react'
 
 interface ConfirmDialogProps {
@@ -21,10 +22,34 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  const cancel = useRef<HTMLButtonElement>(null)
+  const titleId = useId()
+  const descriptionId = useId()
+  useEffect(() => {
+    const el = dialog.current
+    if (!open || !el) return
+    const trigger = document.activeElement
+    el.showModal()
+    cancel.current?.focus()
+    return () => {
+      el.close()
+      if (trigger instanceof HTMLElement) trigger.focus()
+    }
+  }, [open])
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-xs">
+    <dialog
+      ref={dialog}
+      aria-labelledby={titleId}
+      aria-describedby={descriptionId}
+      onCancel={(e) => {
+        e.preventDefault()
+        if (!loading) onCancel()
+      }}
+      className="fixed inset-0 m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl bg-transparent p-0 text-inherit backdrop:bg-black/40"
+    >
       <div className="glass-surface w-full max-w-md rounded-2xl p-6 shadow-2xl">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -32,12 +57,18 @@ export function ConfirmDialog({
               <AlertTriangle className="h-5 w-5" />
             </div>
             <div>
-              <h3 className="text-base font-semibold">{title}</h3>
-              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{description}</p>
+              <h3 id={titleId} className="text-base font-semibold">
+                {title}
+              </h3>
+              <p id={descriptionId} className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                {description}
+              </p>
             </div>
           </div>
           <button
             onClick={onCancel}
+            disabled={loading}
+            aria-label="关闭确认弹窗"
             className="rounded-lg p-1 text-slate-400 hover:bg-slate-500/10 hover:text-slate-600"
           >
             <X className="h-4 w-4" />
@@ -47,6 +78,7 @@ export function ConfirmDialog({
         <div className="mt-6 flex justify-end gap-2.5">
           <button
             onClick={onCancel}
+            ref={cancel}
             disabled={loading}
             className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium hover:bg-slate-100 dark:border-white/10 dark:hover:bg-white/5"
           >
@@ -65,6 +97,6 @@ export function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </dialog>
   )
 }

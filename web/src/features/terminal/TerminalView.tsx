@@ -6,7 +6,7 @@ import { RotateCw, Trash2 } from 'lucide-react'
 import { buildTerminalWSUrl } from '@/api/client'
 import { cn } from '@/lib/format'
 
-export function TerminalView() {
+export function TerminalView({visible}: {visible:boolean}) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -14,6 +14,17 @@ export function TerminalView() {
 
   const [status, setStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting')
   const [sessionSeq, setSessionSeq] = useState(0)
+
+  useEffect(() => {
+    if (visible) window.dispatchEvent(new Event("resize"))
+  }, [visible])
+
+  useEffect(() => {
+    if (status !== 'connected') return
+    const warnOnUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
+    window.addEventListener('beforeunload', warnOnUnload)
+    return () => window.removeEventListener('beforeunload', warnOnUnload)
+  }, [status])
 
   const connect = useCallback(() => {
     setSessionSeq((n) => n + 1)
@@ -81,6 +92,7 @@ export function TerminalView() {
     })
 
     const handleResize = () => {
+      if (!el.offsetWidth) return
       fitAddon.fit()
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(

@@ -173,6 +173,33 @@ func (s *Server) handleReadFile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleCreateFile(w http.ResponseWriter, r *http.Request) {
+	var req struct{ Path string }
+	if json.NewDecoder(r.Body).Decode(&req) != nil || strings.TrimSpace(req.Path) == "" {
+		writeError(w, 400, "invalid_path", "文件路径不合法")
+		return
+	}
+	path, logical, err := s.resolveFilePath(req.Path)
+	if err != nil || logical == "/" {
+		writeError(w, 400, "invalid_path", "文件路径不合法")
+		return
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if err == nil {
+		err = f.Close()
+	}
+	s.recordAudit(r, "file.create", logical, err)
+	if os.IsExist(err) {
+		writeError(w, 409, "file_exists", "同名文件已存在")
+		return
+	}
+	if err != nil {
+		writeError(w, 400, "create_failed", err.Error())
+		return
+	}
+	writeJSON(w, 201, map[string]any{"path": logical, "ok": true})
+}
+
 func (s *Server) handleWriteFile(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Path    string `json:"path"`
@@ -251,18 +278,14 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	}
 	targetLogical += base
 
-	dst, err := os.Create(targetOS)
-	if err != nil {
-		s.recordAudit(r, "file.upload", targetLogical, err)
-		writeError(w, http.StatusInternalServerError, "upload_create_failed", err.Error())
+	err = publishUpload(targetOS, file, hasConfirmHeader(r))
+	s.recordAudit(r, "file.upload", targetLogical, err)
+	if os.IsExist(err) {
+		writeError(w, 409, "file_exists", "同名文件已存在")
 		return
 	}
-	defer dst.Close()
-
-	_, copyErr := io.Copy(dst, file)
-	s.recordAudit(r, "file.upload", targetLogical, copyErr)
-	if copyErr != nil {
-		writeError(w, http.StatusInternalServerError, "upload_write_failed", copyErr.Error())
+	if err != nil {
+		writeError(w, 400, "upload_failed", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"path": targetLogical, "ok": true})
@@ -300,4 +323,42 @@ func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"path": logicalPath, "deleted": true})
+}
+
+func publishUpload(target string, src io.Reader, overwrite bool) error {
+	if !overwrite {
+		if _, err := os.Lstat(target); err == nil {
+			return os.ErrExist
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	temp, err := os.CreateTemp(filepath.Dir(target), ".weplane-upload-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temp.Name())
+	defer temp.Close()
+	if _, err = io.Copy(temp, src); err != nil {
+		return err
+	}
+	if overwrite {
+		info, err := os.Lstat(target)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("只能覆盖普通文件")
+		}
+		if err = temp.Chmod(info.Mode().Perm()); err != nil {
+			return err
+		}
+	}
+	if err = temp.Close(); err != nil {
+		return err
+	}
+	if overwrite {
+		return os.Rename(temp.Name(), target)
+	}
+	return os.Link(temp.Name(), target)
 }

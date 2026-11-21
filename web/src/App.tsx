@@ -1,3 +1,4 @@
+import {navigate,useParam} from '@/lib/navigation'
 import { useCallback, useEffect, useState } from 'react'
 import {
   Activity,
@@ -40,7 +41,19 @@ const navItems: { id: NavTab; label: string; icon: React.ComponentType<{ classNa
 export function App() {
   const [auth, setAuth] = useState<AuthStatus | null>(null)
   const [hostInfo, setHostInfo] = useState<HostInfo | null>(null)
-  const [tab, setTab] = useState<NavTab>('overview')
+  const [requested] = useParam<NavTab>('tab','overview')
+  const tab = navItems.some(item => item.id === requested) ? requested : 'overview'
+  const [menu,setMenu] = useState(false)
+  const [keepTerminal,setKeepTerminal] = useState(false)
+  useEffect(() => {
+    setMenu(false)
+    if(!auth?.authenticated) setKeepTerminal(false)
+    else if(tab === 'terminal') setKeepTerminal(true)
+  },[tab,auth?.authenticated])
+  const setTab = (next: NavTab, target?:string) => {
+    navigate(next,target ? {target} : {})
+    setMenu(false)
+  }
   const [dark, setDark] = useState(() => {
     if (typeof window === 'undefined') return false
     return window.matchMedia('(prefers-color-scheme: dark)').matches
@@ -122,7 +135,7 @@ export function App() {
   return (
     <div className="flex h-screen overflow-hidden">
       {/* Left Narrow Sidebar */}
-      <aside className="glass-sidebar flex h-full w-56 shrink-0 flex-col justify-between p-3.5">
+      <aside className={cn("glass-sidebar fixed inset-y-0 left-0 z-30 bg-white dark:bg-slate-900 md:static md:flex", menu ? "flex" : "hidden", "h-full w-56 shrink-0 flex-col justify-between p-3.5")}>
         <div className="space-y-6">
           <div className="flex items-center gap-2.5 px-2.5 pt-1">
             <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-sky-500/15 text-sky-500">
@@ -160,6 +173,7 @@ export function App() {
         </div>
 
         <div className="border-t border-slate-200/70 px-2.5 pt-3 text-xs dark:border-white/10">
+          <button onClick={() => void handleLogout()} className="mb-3 md:hidden">{auth.username} · 退出登录</button>
           <div className="flex items-center gap-1.5 text-slate-400">
             <Clock className="h-3.5 w-3.5 shrink-0" />
             <span>开机时间</span>
@@ -174,14 +188,16 @@ export function App() {
       </aside>
 
       {/* Right Workspace */}
-      <main className="flex-1 overflow-y-auto px-6 py-6 lg:px-8">
+      {menu && <button aria-label="关闭导航" onClick={() => setMenu(false)} className="fixed inset-0 z-20 bg-black/35 md:hidden" />}
+      <main className="min-w-0 flex-1 overflow-y-auto px-3 py-4 md:px-6 lg:px-8">
         <header className="mb-6 flex items-center justify-between gap-4">
-          <div>
+          <div className="flex items-center gap-2">
+            <button aria-expanded={menu} onClick={() => setMenu(true)} className="rounded-lg border px-2 py-1 md:hidden">菜单</button>
             <h1 className="text-xl font-semibold tracking-tight">{currentMeta.label}</h1>
           </div>
           <div className="flex items-center gap-2.5">
             {auth.mockMode && (
-              <span className="rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-600 dark:text-amber-400">
+              <span className="hidden md:inline rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-600 dark:text-amber-400">
                 本地模拟数据模式
               </span>
             )}
@@ -192,7 +208,7 @@ export function App() {
             >
               {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
-            <div className="glass-surface flex items-center gap-2.5 rounded-2xl py-1.5 pl-2 pr-2.5">
+            <div className="glass-surface hidden md:flex items-center gap-2.5 rounded-2xl py-1.5 pl-2 pr-2.5">
               <div className="flex h-7 w-7 items-center justify-center rounded-full bg-sky-600 text-xs font-semibold text-white">
                 {avatarInitial}
               </div>
@@ -216,7 +232,7 @@ export function App() {
         {tab === 'services' && <ServicesView />}
         {tab === 'containers' && <ContainersView />}
         {tab === 'files' && <FilesView />}
-        {tab === 'terminal' && <TerminalView />}
+        {(keepTerminal || tab === 'terminal') && <div hidden={tab !== 'terminal'}><TerminalView visible={tab === 'terminal'} /></div>}
         {tab === 'audit' && <AuditView />}
         {tab === 'settings' && <SettingsView username={auth.username ?? 'admin'} />}
       </main>

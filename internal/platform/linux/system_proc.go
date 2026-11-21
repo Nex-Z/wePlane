@@ -73,10 +73,10 @@ func (s *systemProvider) GetHostInfo(_ context.Context) (*platform.HostInfo, err
 	}
 
 	return &platform.HostInfo{
-		Hostname:  hostname,
-		OS:        readOSRelease(),
-		Kernel:    kernel,
-		Arch:      runtime.GOARCH,
+		Hostname:    hostname,
+		OS:          readOSRelease(),
+		Kernel:      kernel,
+		Arch:        runtime.GOARCH,
 		CPUModel:    readCPUModel(),
 		CPUCores:    runtime.NumCPU(),
 		UptimeSec:   uptimeSec,
@@ -507,6 +507,7 @@ func (s *systemProvider) readWorkloads(ctx context.Context) platform.WorkloadSum
 					w.ServicesActive++
 				} else if u.ActiveState == "failed" {
 					w.ServicesFailed++
+					w.FailedUnits = append(w.FailedUnits, u.Name)
 				} else {
 					w.ServicesInactive++
 				}
@@ -521,6 +522,7 @@ func (s *systemProvider) readWorkloads(ctx context.Context) platform.WorkloadSum
 					w.ContainersRunning++
 				} else if c.State == "restarting" || c.State == "dead" || (strings.Contains(c.Status, "Exited (") && !strings.HasPrefix(c.Status, "Exited (0)")) {
 					w.ContainersError++
+					w.FailedContainers = append(w.FailedContainers, platform.WorkloadObject{ID: c.ID, Name: c.Name})
 				} else {
 					w.ContainersStopped++
 				}

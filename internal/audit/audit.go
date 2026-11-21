@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -116,6 +117,18 @@ func (l *Logger) Record(e Entry) {
 }
 
 func (l *Logger) Recent(limit int) ([]Entry, error) {
+	return l.Search(Filter{Limit: limit})
+}
+
+type Filter struct {
+	Limit, Offset           int
+	From, To                int64
+	Target, Category, Query string
+	Actions                 []string
+}
+
+func (l *Logger) Search(f Filter) ([]Entry, error) {
+	limit := f.Limit
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
@@ -125,10 +138,43 @@ func (l *Logger) Recent(limit int) ([]Entry, error) {
 		return []Entry{}, nil
 	}
 
-	rows, err := l.conn.Query(
-		`SELECT ts, user, remote_ip, action, target, status, detail FROM audit_logs ORDER BY id DESC LIMIT ?`,
-		limit,
-	)
+	query := "SELECT ts,user,remote_ip,action,target,status,detail FROM audit_logs WHERE 1=1"
+	var args []any
+	if f.From != 0 {
+		query += " AND ts>=?"
+		args = append(args, f.From)
+	}
+	if f.To != 0 {
+		query += " AND ts<=?"
+		args = append(args, f.To)
+	}
+	if f.Target != "" {
+		query += " AND target=?"
+		args = append(args, f.Target)
+	}
+	switch f.Category {
+	case "error", "success":
+		query += " AND status=?"
+		args = append(args, f.Category)
+	case "container":
+		query += " AND (action LIKE 'container.%' OR action LIKE 'compose.%')"
+	case "auth", "service", "file", "settings", "terminal":
+		query += " AND action LIKE ?"
+		args = append(args, f.Category+".%")
+	}
+	if f.Query != "" {
+		query += " AND (instr(lower(user || ' ' || remote_ip || ' ' || target || ' ' || action),lower(?))>0"
+		args = append(args, f.Query)
+		if len(f.Actions) > 0 {
+			query += " OR action IN (" + strings.TrimSuffix(strings.Repeat("?,", len(f.Actions)), ",") + ")"
+			for _, a := range f.Actions {
+				args = append(args, a)
+			}
+		}
+		query += ")"
+	}
+	args = append(args, limit, f.Offset)
+	rows, err := l.conn.Query(query+" ORDER BY id DESC LIMIT ? OFFSET ?", args...)
 	if err != nil {
 		return nil, err
 	}
@@ -138,10 +184,11 @@ func (l *Logger) Recent(limit int) ([]Entry, error) {
 	for rows.Next() {
 		var ts int64
 		var e Entry
-		if err := rows.Scan(&ts, &e.User, &e.RemoteIP, &e.Action, &e.Target, &e.Status, &e.Detail); err == nil {
-			e.Timestamp = time.Unix(ts, 0)
-			out = append(out, e)
+		if err := rows.Scan(&ts, &e.User, &e.RemoteIP, &e.Action, &e.Target, &e.Status, &e.Detail); err != nil {
+			return nil, err
 		}
+		e.Timestamp = time.Unix(ts, 0)
+		out = append(out, e)
 	}
-	return out, nil
+	return out, rows.Err()
 }

@@ -111,6 +111,7 @@ func (s *Server) mountRoutes() {
 
 			priv.Get("/files", s.handleListFiles)
 			priv.Get("/files/content", s.handleReadFile)
+			priv.Post("/files/content", s.handleCreateFile)
 			priv.Put("/files/content", s.handleWriteFile)
 			priv.Post("/files/mkdir", s.handleMkdir)
 			priv.Post("/files/upload", s.handleUploadFile)

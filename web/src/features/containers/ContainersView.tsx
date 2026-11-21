@@ -1,3 +1,4 @@
+import {navigate,useParam} from '@/lib/navigation'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   createColumnHelper,
@@ -41,12 +42,12 @@ function isContainerError(c: ContainerSummary): boolean {
 
 export function ContainersView() {
   const [containers, setContainers] = useState<ContainerSummary[]>([])
-  const [search, setSearch] = useState('')
-  const [filterTab, setFilterTab] = useState<FilterTab>('all')
-  const [projectFilter, setProjectFilter] = useState('')
+  const [search, setSearch] = useParam('q','' as string,true)
+  const [filterTab, setFilterTab] = useParam<FilterTab>('filter','all')
+  const [projectFilter, setProjectFilter] = useParam('project','' as string)
   const [loading, setLoading] = useState(true)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [modalTab, setModalTab] = useState<ModalTab>('logs')
+  const [selectedId, setSelectedId] = useParam('target','' as string)
+  const [modalTab, setModalTab] = useParam<ModalTab>('detail','logs',true)
   const [detail, setDetail] = useState<ContainerDetail | null>(null)
   const [confirmState, setConfirmState] = useState<{
     container: ContainerSummary
@@ -79,7 +80,10 @@ export function ContainersView() {
       setDetail(null)
       return
     }
-    api.containers.inspect(selectedId).then(setDetail).catch(console.error)
+    let active=true
+    setDetail(null)
+    api.containers.inspect(selectedId).then(value => {if(active) setDetail(value)}).catch(err => {if(active) setToast(String(err))})
+    return () => {active=false}
   }, [selectedId])
 
   const projects = useMemo(() => {
@@ -133,7 +137,7 @@ export function ContainersView() {
         await api.containers.delete(ctr.id, confirm)
         setToast(`已删除容器 ${ctr.name}`)
         if (selectedId === ctr.id) {
-          setSelectedId(null)
+          setSelectedId('')
         }
         await loadContainers()
       } else {
@@ -487,7 +491,11 @@ export function ContainersView() {
 
       <div className="glass-surface overflow-hidden rounded-2xl">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
+          <div className="divide-y md:hidden">{table.getRowModel().rows.map(({original}) => (
+            <button key={original.id} className="flex w-full items-center justify-between gap-2 p-3 text-left" onClick={() => openModal(original.id,'logs')}>
+              <span className="min-w-0 break-all text-sm">{original.name}</span><StatusBadge state={original.state} /><span className="shrink-0 text-xs">日志</span>
+            </button>))}{!loading && !table.getRowModel().rows.length && <p className="p-3">暂无匹配记录</p>}</div>
+          <table className="hidden w-full text-left text-sm md:table">
             <thead className="border-b border-slate-200/70 bg-slate-500/5 text-xs text-slate-500 dark:border-white/10 dark:text-slate-400">
               {table.getHeaderGroups().map((hg) => (
                 <tr key={hg.id}>
@@ -528,11 +536,12 @@ export function ContainersView() {
       </div>
 
       <DetailDrawer
-        open={selectedId !== null}
+        open={!!selectedId}
         title={detail?.name ?? ''}
         subtitle={detail?.image}
-        onClose={() => setSelectedId(null)}
+        onClose={() => setSelectedId('')}
       >
+        {selectedId && <button className="mb-3 rounded-lg border px-3 py-2 text-sm" onClick={() => navigate('audit',{target:selectedId,filter:'container'})}>查看对象审计记录</button>}
         {detail && (
           <div className="space-y-5">
             <div className="flex flex-wrap items-center gap-2">

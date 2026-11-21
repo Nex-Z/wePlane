@@ -108,6 +108,7 @@ func (s *systemProvider) GetSnapshot(ctx context.Context) (*platform.MetricsSnap
 				workloads.ServicesActive++
 			} else if u.ActiveState == "failed" {
 				workloads.ServicesFailed++
+				workloads.FailedUnits = append(workloads.FailedUnits, u.Name)
 				alerts = append(alerts, platform.SystemAlert{
 					ID:      fmt.Sprintf("svc-%s", u.Name),
 					Level:   "critical",
@@ -127,6 +128,7 @@ func (s *systemProvider) GetSnapshot(ctx context.Context) (*platform.MetricsSnap
 				workloads.ContainersRunning++
 			} else if c.State == "restarting" || c.State == "dead" || (strings.Contains(c.Status, "Exited (") && !strings.HasPrefix(c.Status, "Exited (0)")) {
 				workloads.ContainersError++
+				workloads.FailedContainers = append(workloads.FailedContainers, platform.WorkloadObject{ID: c.ID, Name: c.Name})
 			} else {
 				workloads.ContainersStopped++
 			}

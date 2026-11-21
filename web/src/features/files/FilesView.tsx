@@ -38,6 +38,8 @@ export function FilesView() {
   const [newNameModal, setNewNameModal] = useState<'dir' | 'file' | null>(null)
   const [newNameValue, setNewNameValue] = useState('')
 
+  const [conflict, setConflict] = useState<{dir:string; file:File} | null>(null)
+  const [uploading,setUploading] = useState(false)
   const uploadInputRef = useRef<HTMLInputElement | null>(null)
 
   const loadDir = useCallback(async (targetPath: string) => {
@@ -111,7 +113,7 @@ export function FilesView() {
         await api.files.mkdir(target)
         setToast(`已新建目录 ${name}`)
       } else {
-        await api.files.write(target, '')
+        await api.files.create(target)
         setToast(`已新建文件 ${name}`)
       }
       setNewNameModal(null)
@@ -126,12 +128,21 @@ export function FilesView() {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
+    await upload(currentPath, file)
+  }
+
+  const upload = async (dir: string, file: File, overwrite = false) => {
+    setUploading(true)
     try {
-      await api.files.upload(currentPath, file)
+      await api.files.upload(dir, file, overwrite)
+      setConflict(null)
       setToast(`已上传 ${file.name}`)
       await loadDir(currentPath)
     } catch (err) {
-      setToast(err instanceof Error ? err.message : '上传失败')
+      if (!overwrite && err instanceof Error && 'status' in err && err.status === 409) setConflict({dir,file})
+      else {setConflict(null); setToast(err instanceof Error ? err.message : '上传失败')}
+    } finally {
+      setUploading(false)
     }
   }
 
@@ -433,6 +444,7 @@ export function FilesView() {
         </div>
       )}
 
+      <ConfirmDialog open={!!conflict} title="覆盖已有文件？" description={conflict ? `将替换 ${conflict.dir.replace(/\/$/, '')}/${conflict.file.name}` : ''} confirmLabel="覆盖文件" loading={uploading} onCancel={() => setConflict(null)} onConfirm={() => {if(conflict) void upload(conflict.dir,conflict.file,true)}} />
       <ConfirmDialog
         open={deleteTarget !== null}
         title={`确认删除${deleteTarget?.isDir ? '目录' : '文件'} ${deleteTarget?.name}？`}
